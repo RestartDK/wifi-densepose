@@ -11,6 +11,7 @@ members = [
     "crates/wifi-densepose-wasm",
     "crates/wifi-densepose-cli",
     "crates/wifi-densepose-mat",
+    "crates/wifi-densepose-server",
 ]
 
 [workspace.package]
