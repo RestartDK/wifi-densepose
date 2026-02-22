@@ -20,13 +20,13 @@
 //! }
 //! ```
 
-use super::AdapterError;
 use super::hardware_adapter::{
     Bandwidth, CsiMetadata, CsiReadings, DeviceType, FrameControlType, SensorCsiReading,
 };
+use super::AdapterError;
 use chrono::{DateTime, Utc};
 use std::collections::VecDeque;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, ErrorKind, Read};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -227,7 +227,7 @@ pub struct CsiPacketMetadata {
     /// Number of receive streams (Nrx)
     pub nrx: u8,
     /// Sequence number
-    pub sequence_num: u16,
+    pub sequence_num: u32,
     /// Frame control field
     pub frame_control: u16,
     /// Rate/MCS index
@@ -270,7 +270,11 @@ impl UdpCsiReceiver {
     pub async fn new(config: ReceiverConfig) -> Result<Self, AdapterError> {
         let udp_config = match &config.source {
             CsiSource::Udp(c) => c,
-            _ => return Err(AdapterError::Config("Invalid config for UDP receiver".into())),
+            _ => {
+                return Err(AdapterError::Config(
+                    "Invalid config for UDP receiver".into(),
+                ))
+            }
         };
 
         let addr = format!("{}:{}", udp_config.bind_address, udp_config.port);
@@ -330,7 +334,10 @@ impl UdpCsiReceiver {
                     }
                 }
             }
-            Ok(Err(e)) => Err(AdapterError::Hardware(format!("Socket receive error: {}", e))),
+            Ok(Err(e)) => Err(AdapterError::Hardware(format!(
+                "Socket receive error: {}",
+                e
+            ))),
             Err(_) => Ok(None), // Timeout
         }
     }
@@ -352,6 +359,7 @@ pub struct SerialCsiReceiver {
     port_path: String,
     buffer: VecDeque<u8>,
     parser: CsiParser,
+    serial_port: Option<Box<dyn serialport::SerialPort>>,
     stats: ReceiverStats,
     running: bool,
 }
@@ -361,7 +369,11 @@ impl SerialCsiReceiver {
     pub fn new(config: ReceiverConfig) -> Result<Self, AdapterError> {
         let serial_config = match &config.source {
             CsiSource::Serial(c) => c,
-            _ => return Err(AdapterError::Config("Invalid config for serial receiver".into())),
+            _ => {
+                return Err(AdapterError::Config(
+                    "Invalid config for serial receiver".into(),
+                ))
+            }
         };
 
         // Verify port exists
@@ -385,6 +397,7 @@ impl SerialCsiReceiver {
             port_path: serial_config.port.clone(),
             buffer: VecDeque::with_capacity(config.buffer_size),
             parser: CsiParser::new(config.format),
+            serial_port: None,
             stats: ReceiverStats::default(),
             running: false,
             config,
@@ -393,9 +406,70 @@ impl SerialCsiReceiver {
 
     /// Start receiving (blocking, typically run in separate thread)
     pub fn start(&mut self) -> Result<(), AdapterError> {
+        let serial_config = match &self.config.source {
+            CsiSource::Serial(c) => c,
+            _ => {
+                return Err(AdapterError::Config(
+                    "Invalid config for serial receiver".into(),
+                ))
+            }
+        };
+
+        let data_bits = match serial_config.data_bits {
+            5 => serialport::DataBits::Five,
+            6 => serialport::DataBits::Six,
+            7 => serialport::DataBits::Seven,
+            8 => serialport::DataBits::Eight,
+            value => {
+                return Err(AdapterError::Config(format!(
+                    "Unsupported serial data bits: {}",
+                    value
+                )))
+            }
+        };
+
+        let stop_bits = match serial_config.stop_bits {
+            1 => serialport::StopBits::One,
+            2 => serialport::StopBits::Two,
+            value => {
+                return Err(AdapterError::Config(format!(
+                    "Unsupported serial stop bits: {}",
+                    value
+                )))
+            }
+        };
+
+        let parity = match serial_config.parity {
+            SerialParity::None => serialport::Parity::None,
+            SerialParity::Odd => serialport::Parity::Odd,
+            SerialParity::Even => serialport::Parity::Even,
+        };
+
+        let timeout = std::time::Duration::from_millis(self.config.timeout_ms.max(1));
+
+        let port = serialport::new(&self.port_path, serial_config.baud_rate)
+            .data_bits(data_bits)
+            .stop_bits(stop_bits)
+            .parity(parity)
+            .timeout(timeout)
+            .open()
+            .map_err(|e| {
+                AdapterError::Hardware(format!(
+                    "Failed to open serial port {} at {} baud: {}",
+                    self.port_path, serial_config.baud_rate, e
+                ))
+            })?;
+
+        self.buffer.clear();
+        self.serial_port = Some(port);
         self.running = true;
-        // In production, this would open the serial port using serialport crate
-        // and start reading data
+
+        tracing::info!(
+            "Serial receiver started on {} at {} baud",
+            self.port_path,
+            serial_config.baud_rate
+        );
+
         Ok(())
     }
 
@@ -404,6 +478,8 @@ impl SerialCsiReceiver {
         if !self.running {
             return Err(AdapterError::Hardware("Receiver not started".into()));
         }
+
+        self.read_serial_data()?;
 
         // Try to parse a complete packet from buffer
         if let Some(packet_data) = self.extract_packet_from_buffer() {
@@ -422,6 +498,30 @@ impl SerialCsiReceiver {
         }
 
         Ok(None)
+    }
+
+    /// Read available bytes from serial port into internal buffer.
+    fn read_serial_data(&mut self) -> Result<(), AdapterError> {
+        let port = self
+            .serial_port
+            .as_mut()
+            .ok_or_else(|| AdapterError::Hardware("Serial port not initialized".into()))?;
+
+        let mut read_buffer = vec![0u8; self.config.buffer_size.min(4096).max(64)];
+
+        match port.read(&mut read_buffer) {
+            Ok(0) => {}
+            Ok(len) => self.feed_data(&read_buffer[..len]),
+            Err(ref e) if matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {}
+            Err(e) => {
+                return Err(AdapterError::Hardware(format!(
+                    "Serial read error on {}: {}",
+                    self.port_path, e
+                )))
+            }
+        }
+
+        Ok(())
     }
 
     /// Extract a complete packet from the buffer
@@ -488,6 +588,7 @@ impl SerialCsiReceiver {
     /// Stop receiving
     pub fn stop(&mut self) {
         self.running = false;
+        self.serial_port = None;
     }
 
     /// Get receiver statistics
@@ -519,7 +620,11 @@ impl PcapCsiReader {
     pub fn new(config: ReceiverConfig) -> Result<Self, AdapterError> {
         let pcap_config = match &config.source {
             CsiSource::Pcap(c) => c,
-            _ => return Err(AdapterError::Config("Invalid config for PCAP reader".into())),
+            _ => {
+                return Err(AdapterError::Config(
+                    "Invalid config for PCAP reader".into(),
+                ))
+            }
         };
 
         if !Path::new(&pcap_config.file_path).exists() {
@@ -658,9 +763,9 @@ impl PcapCsiReader {
 
         // Read packet data
         let mut data = vec![0u8; incl_len as usize];
-        reader.read_exact(&mut data).map_err(|e| {
-            AdapterError::Hardware(format!("Failed to read packet data: {}", e))
-        })?;
+        reader
+            .read_exact(&mut data)
+            .map_err(|e| AdapterError::Hardware(format!("Failed to read packet data: {}", e)))?;
 
         // Convert timestamp
         let timestamp = chrono::DateTime::from_timestamp(ts_sec as i64, ts_usec * 1000)
@@ -803,7 +908,9 @@ impl CsiParser {
             CsiPacketFormat::PicoScenes => self.parse_picoscenes(data),
             CsiPacketFormat::JsonCsi => self.parse_json(data),
             CsiPacketFormat::RawBinary => self.parse_raw_binary(data),
-            CsiPacketFormat::Auto => Err(AdapterError::DataFormat("Unable to detect format".into())),
+            CsiPacketFormat::Auto => {
+                Err(AdapterError::DataFormat("Unable to detect format".into()))
+            }
         }
     }
 
@@ -840,53 +947,59 @@ impl CsiParser {
             .map_err(|e| AdapterError::DataFormat(format!("Invalid UTF-8: {}", e)))?
             .trim();
 
-        // Format: CSI_DATA,mac,rssi,channel,len,data...
+        if !line.starts_with("CSI_DATA,") {
+            return Err(AdapterError::DataFormat(
+                "ESP32 CSI packet must start with CSI_DATA,".into(),
+            ));
+        }
+
+        // ESP-CSI (ESP32) monitor format with 25 columns:
+        // CSI_DATA,seq,mac,rssi,rate,sig_mode,mcs,cwb,smoothing,not_sounding,
+        // aggregation,stbc,fec_coding,sgi,noise_floor,ampdu_cnt,channel,
+        // secondary_channel,timestamp,ant,sig_len,rx_state,len,first_word,data
         let parts: Vec<&str> = line.split(',').collect();
 
-        if parts.len() < 5 {
-            return Err(AdapterError::DataFormat("Invalid ESP32 CSI format".into()));
+        if parts.len() < 25 {
+            return Err(AdapterError::DataFormat(format!(
+                "Invalid ESP32 CSI format: expected at least 25 columns, got {}",
+                parts.len()
+            )));
         }
 
-        let _prefix = parts[0]; // "CSI_DATA"
-        let mac_str = parts[1];
-        let rssi: i8 = parts[2]
-            .parse()
-            .map_err(|_| AdapterError::DataFormat("Invalid RSSI value".into()))?;
-        let channel: u8 = parts[3]
-            .parse()
-            .map_err(|_| AdapterError::DataFormat("Invalid channel value".into()))?;
-        let _len: usize = parts[4]
-            .parse()
-            .map_err(|_| AdapterError::DataFormat("Invalid length value".into()))?;
+        let sequence_num: u32 = Self::parse_esp32_column(&parts, 1, "sequence")?;
+        let mac_str = parts[2].trim();
+        let tx_mac = Self::parse_mac_address(mac_str)?;
 
-        // Parse MAC address
-        let mut tx_mac = [0u8; 6];
-        let mac_parts: Vec<&str> = mac_str.split(':').collect();
-        if mac_parts.len() == 6 {
-            for (i, part) in mac_parts.iter().enumerate() {
-                tx_mac[i] = u8::from_str_radix(part, 16).unwrap_or(0);
-            }
-        }
+        let rssi: i8 = Self::parse_esp32_column(&parts, 3, "rssi")?;
+        let rate: u8 = Self::parse_esp32_column(&parts, 4, "rate")?;
+        let cwb: u8 = Self::parse_esp32_column(&parts, 7, "bandwidth")?;
+        let noise_floor: i8 = Self::parse_esp32_column(&parts, 14, "noise_floor")?;
+        let channel: u8 = Self::parse_esp32_column(&parts, 16, "channel")?;
+        let secondary_channel: i8 = Self::parse_esp32_column(&parts, 17, "secondary_channel")?;
+        let _len: usize = Self::parse_esp32_column(&parts, 22, "len")?;
 
-        // Parse CSI data (remaining parts as comma-separated values)
+        let csi_values_raw = parts[24..].join(",");
+        let iq_values = Self::parse_esp32_iq_values(&csi_values_raw)?;
+
+        // Parse IQ values into amplitude/phase vectors
         let mut amplitudes = Vec::new();
         let mut phases = Vec::new();
 
-        for (i, part) in parts[5..].iter().enumerate() {
-            if let Ok(val) = part.parse::<f64>() {
-                // Alternate between amplitude and phase
-                if i % 2 == 0 {
-                    amplitudes.push(val);
-                } else {
-                    phases.push(val);
-                }
-            }
+        for pair in iq_values.chunks_exact(2) {
+            // ESP-CSI provides I/Q values as signed integers.
+            // The sequence is imag, real.
+            let imag = pair[0] as f64;
+            let real = pair[1] as f64;
+
+            amplitudes.push((real * real + imag * imag).sqrt());
+            phases.push(imag.atan2(real));
         }
 
-        // Ensure phases vector matches amplitudes
-        while phases.len() < amplitudes.len() {
-            phases.push(0.0);
-        }
+        let bandwidth = if cwb == 1 {
+            Bandwidth::HT40
+        } else {
+            Bandwidth::HT20
+        };
 
         Ok(CsiPacket {
             timestamp: Utc::now(),
@@ -894,12 +1007,15 @@ impl CsiParser {
             amplitudes,
             phases,
             rssi,
-            noise_floor: -92,
+            noise_floor,
             metadata: CsiPacketMetadata {
                 tx_mac,
                 rx_mac: [0; 6],
                 channel,
-                bandwidth: Bandwidth::HT20,
+                bandwidth,
+                sequence_num,
+                rate,
+                secondary_channel,
                 format: CsiPacketFormat::Esp32Csi,
                 ..Default::default()
             },
@@ -907,11 +1023,76 @@ impl CsiParser {
         })
     }
 
+    fn parse_esp32_column<T>(
+        parts: &[&str],
+        index: usize,
+        column_name: &str,
+    ) -> Result<T, AdapterError>
+    where
+        T: std::str::FromStr,
+    {
+        let raw = parts
+            .get(index)
+            .ok_or_else(|| {
+                AdapterError::DataFormat(format!("Missing ESP32 CSI column: {}", column_name))
+            })?
+            .trim();
+
+        raw.parse::<T>().map_err(|_| {
+            AdapterError::DataFormat(format!("Invalid ESP32 CSI {} value: {}", column_name, raw))
+        })
+    }
+
+    fn parse_mac_address(mac: &str) -> Result<[u8; 6], AdapterError> {
+        let parts: Vec<&str> = mac.split(':').collect();
+        if parts.len() != 6 {
+            return Err(AdapterError::DataFormat(format!(
+                "Invalid MAC address in ESP32 CSI packet: {}",
+                mac
+            )));
+        }
+
+        let mut parsed = [0u8; 6];
+        for (i, part) in parts.iter().enumerate() {
+            parsed[i] = u8::from_str_radix(part, 16).map_err(|_| {
+                AdapterError::DataFormat(format!("Invalid MAC address segment: {}", part))
+            })?;
+        }
+
+        Ok(parsed)
+    }
+
+    fn parse_esp32_iq_values(raw: &str) -> Result<Vec<i16>, AdapterError> {
+        let mut values = Vec::new();
+        let mut token = String::new();
+
+        for ch in raw.chars() {
+            if ch.is_ascii_digit() || ch == '-' || ch == '+' {
+                token.push(ch);
+            } else if !token.is_empty() {
+                values.push(token.parse::<i16>().map_err(|_| {
+                    AdapterError::DataFormat(format!("Invalid ESP32 CSI IQ value: {}", token))
+                })?);
+                token.clear();
+            }
+        }
+
+        if !token.is_empty() {
+            values.push(token.parse::<i16>().map_err(|_| {
+                AdapterError::DataFormat(format!("Invalid ESP32 CSI IQ value: {}", token))
+            })?);
+        }
+
+        Ok(values)
+    }
+
     /// Parse Intel 5300 BFEE format
     fn parse_intel_5300(&self, data: &[u8]) -> Result<CsiPacket, AdapterError> {
         // Intel 5300 BFEE structure (from Linux CSI Tool)
         if data.len() < 25 {
-            return Err(AdapterError::DataFormat("Intel 5300 packet too short".into()));
+            return Err(AdapterError::DataFormat(
+                "Intel 5300 packet too short".into(),
+            ));
         }
 
         // Parse header
@@ -1088,7 +1269,7 @@ impl CsiParser {
             metadata: CsiPacketMetadata {
                 channel,
                 bandwidth,
-                sequence_num: seq,
+                sequence_num: seq as u32,
                 frame_control: fc,
                 format: CsiPacketFormat::NexmonCsi,
                 ..Default::default()
@@ -1101,7 +1282,9 @@ impl CsiParser {
     fn parse_picoscenes(&self, data: &[u8]) -> Result<CsiPacket, AdapterError> {
         // PicoScenes has a complex structure with multiple segments
         if data.len() < 100 {
-            return Err(AdapterError::DataFormat("PicoScenes packet too short".into()));
+            return Err(AdapterError::DataFormat(
+                "PicoScenes packet too short".into(),
+            ));
         }
 
         // Simplified parsing - real implementation would parse all segments
@@ -1133,34 +1316,20 @@ impl CsiParser {
         let json: serde_json::Value = serde_json::from_str(json_str)
             .map_err(|e| AdapterError::DataFormat(format!("Invalid JSON: {}", e)))?;
 
-        let rssi = json
-            .get("rssi")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(-50) as i8;
+        let rssi = json.get("rssi").and_then(|v| v.as_i64()).unwrap_or(-50) as i8;
 
-        let channel = json
-            .get("channel")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(6) as u8;
+        let channel = json.get("channel").and_then(|v| v.as_u64()).unwrap_or(6) as u8;
 
         let amplitudes: Vec<f64> = json
             .get("amplitudes")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_f64())
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
             .unwrap_or_default();
 
         let phases: Vec<f64> = json
             .get("phases")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_f64())
-                    .collect()
-            })
+            .map(|arr| arr.iter().filter_map(|v| v.as_f64()).collect())
             .unwrap_or_default();
 
         let source_id = json
@@ -1323,7 +1492,7 @@ mod tests {
     #[test]
     fn test_parser_detect_esp32() {
         let parser = CsiParser::new(CsiPacketFormat::Auto);
-        let data = b"CSI_DATA,AA:BB:CC:DD:EE:FF,-45,6,128,1.0,0.5";
+        let data = b"CSI_DATA,42,AA:BB:CC:DD:EE:FF,-45,11,0,0,0,0,0,0,0,0,0,-95,1,6,0,123456,0,128,0,128,0,\"[12 -8 20 -10 18 -9]\"";
         let format = parser.detect_format(data);
         assert_eq!(format, CsiPacketFormat::Esp32Csi);
     }
@@ -1342,12 +1511,36 @@ mod tests {
     #[test]
     fn test_parse_esp32() {
         let parser = CsiParser::new(CsiPacketFormat::Esp32Csi);
-        let data = b"CSI_DATA,AA:BB:CC:DD:EE:FF,-45,6,128,1.0,0.5,2.0,0.6,3.0,0.7";
+        let data = b"CSI_DATA,42,AA:BB:CC:DD:EE:FF,-45,11,0,0,0,0,0,0,0,0,0,-95,1,6,0,123456,0,128,0,128,0,\"[12 -8 20 -10 18 -9]\"";
 
         let packet = parser.parse(data).unwrap();
         assert_eq!(packet.rssi, -45);
+        assert_eq!(packet.noise_floor, -95);
         assert_eq!(packet.metadata.channel, 6);
+        assert_eq!(packet.metadata.sequence_num, 42);
+        assert_eq!(packet.metadata.rate, 11);
         assert_eq!(packet.amplitudes.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_esp32_large_sequence() {
+        let parser = CsiParser::new(CsiPacketFormat::Esp32Csi);
+        let data = b"CSI_DATA,218777,1a:00:00:00:00:00,-55,11,1,0,1,1,1,0,0,0,0,-96,0,11,2,-1820718049,0,47,0,384,1,\"[47,-16,2,0]\"";
+
+        let packet = parser.parse(data).unwrap();
+        assert_eq!(packet.metadata.sequence_num, 218777);
+        assert_eq!(packet.metadata.channel, 11);
+        assert_eq!(packet.metadata.rate, 11);
+    }
+
+    #[test]
+    fn test_parse_esp32_large_sequence_to_readings() {
+        let parser = CsiParser::new(CsiPacketFormat::Esp32Csi);
+        let data = b"CSI_DATA,218777,1a:00:00:00:00:00,-55,11,1,0,1,1,1,0,0,0,0,-96,0,11,2,-1820718049,0,47,0,384,1,\"[47,-16,2,0]\"";
+
+        let packet = parser.parse(data).unwrap();
+        let readings: CsiReadings = packet.into();
+        assert_eq!(readings.readings[0].sequence_num, Some(218777));
     }
 
     #[test]
@@ -1373,6 +1566,7 @@ mod tests {
             noise_floor: -92,
             metadata: CsiPacketMetadata {
                 channel: 6,
+                sequence_num: 218777,
                 ..Default::default()
             },
             raw_data: None,
@@ -1382,6 +1576,7 @@ mod tests {
         assert_eq!(readings.readings.len(), 1);
         assert_eq!(readings.readings[0].amplitudes.len(), 3);
         assert_eq!(readings.metadata.channel, 6);
+        assert_eq!(readings.readings[0].sequence_num, Some(218777));
     }
 
     #[test]
@@ -1393,12 +1588,13 @@ mod tests {
             port_path: "/dev/ttyUSB0".to_string(),
             buffer: VecDeque::new(),
             parser: CsiParser::new(CsiPacketFormat::Esp32Csi),
+            serial_port: None,
             stats: ReceiverStats::default(),
             running: true,
         };
 
         // Feed some data
-        let test_data = b"CSI_DATA,AA:BB:CC:DD:EE:FF,-45,6,128,1.0,0.5\n";
+        let test_data = b"CSI_DATA,42,AA:BB:CC:DD:EE:FF,-45,11,0,0,0,0,0,0,0,0,0,-95,1,6,0,123456,0,128,0,128,0,\"[12 -8 20 -10]\"\n";
         let expected_len = test_data.len() as u64;
         receiver.feed_data(test_data);
         assert_eq!(receiver.stats.bytes_received, expected_len);

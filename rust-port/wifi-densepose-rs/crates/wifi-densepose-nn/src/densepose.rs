@@ -206,7 +206,12 @@ impl DensePoseHead {
     }
 
     /// Get expected input shape for a given batch size
-    pub fn expected_input_shape(&self, batch_size: usize, height: usize, width: usize) -> TensorShape {
+    pub fn expected_input_shape(
+        &self,
+        batch_size: usize,
+        height: usize,
+        width: usize,
+    ) -> TensorShape {
         TensorShape::new(vec![batch_size, self.config.input_channels, height, width])
     }
 
@@ -247,9 +252,10 @@ impl DensePoseHead {
 
     /// Native forward pass using loaded weights
     fn forward_native(&self, input: &Tensor) -> NnResult<DensePoseOutput> {
-        let weights = self.weights.as_ref().ok_or_else(|| {
-            NnError::inference("No weights loaded for native inference")
-        })?;
+        let weights = self
+            .weights
+            .as_ref()
+            .ok_or_else(|| NnError::inference("No weights loaded for native inference"))?;
 
         let input_arr = input.as_array4()?;
         let (batch, _channels, height, width) = input_arr.dim();
@@ -294,7 +300,12 @@ impl DensePoseHead {
         let out_width = width * 2;
 
         // Create mock segmentation output
-        let seg_shape = [batch, self.config.segmentation_channels(), out_height, out_width];
+        let seg_shape = [
+            batch,
+            self.config.segmentation_channels(),
+            out_height,
+            out_width,
+        ];
         let segmentation = Tensor::zeros_4d(seg_shape);
 
         // Create mock UV output
@@ -309,7 +320,11 @@ impl DensePoseHead {
     }
 
     /// Apply a convolution layer
-    fn apply_conv_layer(&self, input: &Array4<f32>, weights: &ConvLayerWeights) -> NnResult<Array4<f32>> {
+    fn apply_conv_layer(
+        &self,
+        input: &Array4<f32>,
+        weights: &ConvLayerWeights,
+    ) -> NnResult<Array4<f32>> {
         let (batch, in_channels, in_height, in_width) = input.dim();
         let (out_channels, _, kernel_h, kernel_w) = weights.weight.dim();
 
@@ -331,8 +346,10 @@ impl DensePoseHead {
                                 for kw in 0..kernel_w {
                                     let ih = oh + kh;
                                     let iw = ow + kw;
-                                    if ih >= pad_h && ih < in_height + pad_h
-                                        && iw >= pad_w && iw < in_width + pad_w
+                                    if ih >= pad_h
+                                        && ih < in_height + pad_h
+                                        && iw >= pad_w
+                                        && iw < in_width + pad_w
                                     {
                                         let input_val = input[[b, ic, ih - pad_h, iw - pad_w]];
                                         sum += input_val * weights.weight[[oc, ic, kh, kw]];
@@ -419,17 +436,31 @@ impl DensePoseHead {
         // Return a tensor with constant confidence for now
         let shape = uv.shape();
         let arr = Array4::from_elem(
-            (shape.dim(0).unwrap_or(1), 1, shape.dim(2).unwrap_or(1), shape.dim(3).unwrap_or(1)),
+            (
+                shape.dim(0).unwrap_or(1),
+                1,
+                shape.dim(2).unwrap_or(1),
+                shape.dim(3).unwrap_or(1),
+            ),
             confidence_val,
         );
         Ok(Tensor::Float4D(arr))
     }
 
     /// Get feature statistics for debugging
-    pub fn get_output_stats(&self, output: &DensePoseOutput) -> NnResult<HashMap<String, TensorStats>> {
+    pub fn get_output_stats(
+        &self,
+        output: &DensePoseOutput,
+    ) -> NnResult<HashMap<String, TensorStats>> {
         let mut stats = HashMap::new();
-        stats.insert("segmentation".to_string(), TensorStats::from_tensor(&output.segmentation)?);
-        stats.insert("uv_coordinates".to_string(), TensorStats::from_tensor(&output.uv_coordinates)?);
+        stats.insert(
+            "segmentation".to_string(),
+            TensorStats::from_tensor(&output.segmentation)?,
+        );
+        stats.insert(
+            "uv_coordinates".to_string(),
+            TensorStats::from_tensor(&output.uv_coordinates)?,
+        );
         Ok(stats)
     }
 }

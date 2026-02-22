@@ -16,16 +16,16 @@
 //! - Depth estimation head with uncertainty (mean + variance output)
 
 use super::{DebrisFeatures, DepthEstimate, MlError, MlResult};
-use ndarray::{Array1, Array2, Array4, s};
+use ndarray::{s, Array1, Array2, Array4};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
 #[cfg(feature = "onnx")]
-use wifi_densepose_nn::{OnnxBackend, OnnxSession, InferenceOptions, Tensor, TensorShape};
+use wifi_densepose_nn::{InferenceOptions, OnnxBackend, OnnxSession, Tensor, TensorShape};
 
 /// Errors specific to debris model operations
 #[derive(Debug, Error)]
@@ -162,15 +162,14 @@ pub struct DebrisClassification {
 impl DebrisClassification {
     /// Create a new debris classification
     pub fn new(probabilities: Vec<f32>) -> Self {
-        let (max_idx, &max_prob) = probabilities.iter()
+        let (max_idx, &max_prob) = probabilities
+            .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .unwrap_or((7, &0.0));
 
         // Check for composite materials (multiple high probabilities)
-        let high_prob_count = probabilities.iter()
-            .filter(|&&p| p > 0.2)
-            .count();
+        let high_prob_count = probabilities.iter().filter(|&&p| p > 0.2).count();
 
         let is_composite = high_prob_count > 1 && max_prob < 0.7;
         let material_type = if is_composite {
@@ -194,7 +193,8 @@ impl DebrisClassification {
     /// Estimate number of debris layers from probability distribution
     fn estimate_layers(probabilities: &[f32]) -> u8 {
         // More uniform distribution suggests more layers
-        let entropy: f32 = probabilities.iter()
+        let entropy: f32 = probabilities
+            .iter()
             .filter(|&&p| p > 0.01)
             .map(|&p| -p * p.ln())
             .sum();
@@ -213,7 +213,8 @@ impl DebrisClassification {
         }
 
         let primary_idx = self.material_type.to_index();
-        self.class_probabilities.iter()
+        self.class_probabilities
+            .iter()
             .enumerate()
             .filter(|(i, _)| *i != primary_idx)
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
@@ -316,17 +317,18 @@ impl DebrisFeatureExtractor {
         let feature_vector = features.to_feature_vector();
 
         // Reshape to 2D for model input (batch_size=1, features)
-        let arr = Array2::from_shape_vec(
-            (1, feature_vector.len()),
-            feature_vector,
-        ).map_err(|e| MlError::FeatureExtraction(e.to_string()))?;
+        let arr = Array2::from_shape_vec((1, feature_vector.len()), feature_vector)
+            .map_err(|e| MlError::FeatureExtraction(e.to_string()))?;
 
         Ok(arr)
     }
 
     /// Extract spatial-temporal features for CNN input
     pub fn extract_spatial_temporal(&self, features: &DebrisFeatures) -> MlResult<Array4<f32>> {
-        let amp_len = features.amplitude_attenuation.len().min(self.num_subcarriers);
+        let amp_len = features
+            .amplitude_attenuation
+            .len()
+            .min(self.num_subcarriers);
         let phase_len = features.phase_shifts.len().min(self.num_subcarriers);
 
         // Create 4D tensor: [batch, channels, height, width]
@@ -336,7 +338,12 @@ impl DebrisFeatureExtractor {
         let mut tensor = Array4::<f32>::zeros((1, 2, self.num_subcarriers, 1));
 
         // Fill amplitude channel
-        for (i, &v) in features.amplitude_attenuation.iter().take(amp_len).enumerate() {
+        for (i, &v) in features
+            .amplitude_attenuation
+            .iter()
+            .take(amp_len)
+            .enumerate()
+        {
             tensor[[0, 0, i, 0]] = v;
         }
 
@@ -494,7 +501,8 @@ impl DebrisModel {
         let input_array = Array4::from_shape_vec(
             (1, 1, 1, input_features.len()),
             input_features.iter().cloned().collect(),
-        ).map_err(|e| MlError::Inference(e.to_string()))?;
+        )
+        .map_err(|e| MlError::Inference(e.to_string()))?;
 
         let input_tensor = Tensor::Float4D(input_array);
 
@@ -502,12 +510,15 @@ impl DebrisModel {
         inputs.insert("input".to_string(), input_tensor);
 
         // Run inference
-        let outputs = session.write().run(inputs)
+        let outputs = session
+            .write()
+            .run(inputs)
             .map_err(|e| MlError::NeuralNetwork(e))?;
 
         // Extract classification probabilities
         let probabilities = if let Some(output) = outputs.get("material_probs") {
-            output.to_vec()
+            output
+                .to_vec()
                 .map_err(|e| MlError::Inference(e.to_string()))?
         } else {
             // Fallback to rule-based
@@ -516,7 +527,11 @@ impl DebrisModel {
 
         // Ensure we have enough classes
         let mut probs = vec![0.0f32; MaterialType::NUM_CLASSES];
-        for (i, &p) in probabilities.iter().take(MaterialType::NUM_CLASSES).enumerate() {
+        for (i, &p) in probabilities
+            .iter()
+            .take(MaterialType::NUM_CLASSES)
+            .enumerate()
+        {
             probs[i] = p;
         }
 
@@ -552,7 +567,8 @@ impl DebrisModel {
         // Apply softmax
         let max_score = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         let exp_sum: f32 = scores.iter().map(|&s| (s - max_score).exp()).sum();
-        let probabilities: Vec<f32> = scores.iter()
+        let probabilities: Vec<f32> = scores
+            .iter()
             .map(|&s| (s - max_score).exp() / exp_sum)
             .collect();
 
@@ -561,7 +577,10 @@ impl DebrisModel {
 
     /// Predict signal attenuation through debris
     #[instrument(skip(self, features))]
-    pub async fn predict_attenuation(&self, features: &DebrisFeatures) -> MlResult<AttenuationPrediction> {
+    pub async fn predict_attenuation(
+        &self,
+        features: &DebrisFeatures,
+    ) -> MlResult<AttenuationPrediction> {
         // Get material classification first
         let classification = self.classify(features).await?;
 
@@ -579,13 +598,18 @@ impl DebrisModel {
         let layer_factor = 1.0 + 0.2 * (classification.estimated_layers as f32 - 1.0);
 
         // Composite factor
-        let composite_factor = if classification.is_composite { 1.2 } else { 1.0 };
+        let composite_factor = if classification.is_composite {
+            1.2
+        } else {
+            1.0
+        };
 
-        let total_attenuation = base_attenuation * measured_factor * layer_factor * composite_factor;
+        let total_attenuation =
+            base_attenuation * measured_factor * layer_factor * composite_factor;
 
         // Uncertainty estimation
         let uncertainty = if classification.is_composite {
-            total_attenuation * 0.3  // Higher uncertainty for composite
+            total_attenuation * 0.3 // Higher uncertainty for composite
         } else {
             total_attenuation * (1.0 - classification.confidence) * 0.5
         };
@@ -593,7 +617,11 @@ impl DebrisModel {
         // Estimate depth (will be refined by depth estimation)
         let estimated_depth = self.estimate_depth_internal(features, total_attenuation);
 
-        Ok(AttenuationPrediction::new(total_attenuation, estimated_depth, uncertainty))
+        Ok(AttenuationPrediction::new(
+            total_attenuation,
+            estimated_depth,
+            uncertainty,
+        ))
     }
 
     /// Estimate penetration depth
@@ -606,11 +634,7 @@ impl DebrisModel {
         let depth = self.estimate_depth_internal(features, attenuation.attenuation_db);
 
         // Calculate uncertainty
-        let uncertainty = self.calculate_depth_uncertainty(
-            features,
-            depth,
-            attenuation.confidence,
-        );
+        let uncertainty = self.calculate_depth_uncertainty(features, depth, attenuation.confidence);
 
         let confidence = (attenuation.confidence * features.temporal_stability).min(1.0);
 
@@ -681,7 +705,10 @@ mod tests {
     fn test_material_type() {
         assert_eq!(MaterialType::from_index(0), MaterialType::Concrete);
         assert_eq!(MaterialType::Concrete.to_index(), 0);
-        assert!(MaterialType::Concrete.typical_attenuation() > MaterialType::Glass.typical_attenuation());
+        assert!(
+            MaterialType::Concrete.typical_attenuation()
+                > MaterialType::Glass.typical_attenuation()
+        );
     }
 
     #[test]

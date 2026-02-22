@@ -22,8 +22,8 @@ pub struct HeartbeatDetectorConfig {
 impl Default for HeartbeatDetectorConfig {
     fn default() -> Self {
         Self {
-            min_rate_bpm: 30.0,   // Very slow (bradycardia)
-            max_rate_bpm: 200.0,  // Very fast (extreme tachycardia)
+            min_rate_bpm: 30.0,  // Very slow (bradycardia)
+            max_rate_bpm: 200.0, // Very fast (extreme tachycardia)
             min_signal_strength: 0.05,
             window_size: 1024,
             enhanced_processing: true,
@@ -85,12 +85,8 @@ impl HeartbeatDetector {
         let min_freq = self.config.min_rate_bpm as f64 / 60.0;
         let max_freq = self.config.max_rate_bpm as f64 / 60.0;
 
-        let (heart_freq, strength) = self.find_heartbeat_frequency(
-            &spectrum,
-            sample_rate,
-            min_freq,
-            max_freq,
-        )?;
+        let (heart_freq, strength) =
+            self.find_heartbeat_frequency(&spectrum, sample_rate, min_freq, max_freq)?;
 
         if strength < self.config.min_signal_strength {
             return None;
@@ -200,7 +196,7 @@ impl HeartbeatDetector {
 
     /// Compute micro-Doppler spectrum optimized for heartbeat detection
     fn compute_micro_doppler_spectrum(&self, signal: &[f64], _sample_rate: f64) -> Vec<f64> {
-        use rustfft::{FftPlanner, num_complex::Complex};
+        use rustfft::{num_complex::Complex, FftPlanner};
 
         let n = signal.len().next_power_of_two();
         let mut planner = FftPlanner::new();
@@ -212,8 +208,7 @@ impl HeartbeatDetector {
             .enumerate()
             .map(|(i, &x)| {
                 let n_f = signal.len() as f64;
-                let window = 0.42
-                    - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n_f).cos()
+                let window = 0.42 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n_f).cos()
                     + 0.08 * (4.0 * std::f64::consts::PI * i as f64 / n_f).cos();
                 Complex::new(x * window, 0.0)
             })
@@ -223,10 +218,7 @@ impl HeartbeatDetector {
         fft.process(&mut buffer);
 
         // Return power spectrum
-        buffer.iter()
-            .take(n / 2)
-            .map(|c| c.norm_sqr())
-            .collect()
+        buffer.iter().take(n / 2).map(|c| c.norm_sqr()).collect()
     }
 
     /// Find heartbeat frequency in spectrum
@@ -328,11 +320,7 @@ impl HeartbeatDetector {
         let strength_score = (strength / 0.5).min(1.0) as f32;
 
         // Very low or very high HRV might indicate noise
-        let hrv_score = if hrv > 0.05 && hrv < 0.5 {
-            1.0
-        } else {
-            0.5
-        };
+        let hrv_score = if hrv > 0.05 && hrv < 0.5 { 1.0 } else { 0.5 };
 
         strength_score * 0.7 + hrv_score * 0.3
     }

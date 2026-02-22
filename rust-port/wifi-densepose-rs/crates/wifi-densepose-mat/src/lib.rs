@@ -87,57 +87,64 @@ pub mod ml;
 
 // Re-export main types
 pub use domain::{
-    survivor::{Survivor, SurvivorId, SurvivorMetadata, SurvivorStatus},
-    disaster_event::{DisasterEvent, DisasterEventId, DisasterType, EventStatus},
-    scan_zone::{ScanZone, ScanZoneId, ZoneBounds, ZoneStatus, ScanParameters},
     alert::{Alert, AlertId, AlertPayload, Priority},
+    coordinates::{Coordinates3D, DepthEstimate, LocationUncertainty},
+    disaster_event::{DisasterEvent, DisasterEventId, DisasterType, EventStatus},
+    events::{AlertEvent, DetectionEvent, DomainEvent},
+    scan_zone::{ScanParameters, ScanZone, ScanZoneId, ZoneBounds, ZoneStatus},
+    survivor::{Survivor, SurvivorId, SurvivorMetadata, SurvivorStatus},
+    triage::{TriageCalculator, TriageStatus},
     vital_signs::{
-        VitalSignsReading, BreathingPattern, BreathingType,
-        HeartbeatSignature, MovementProfile, MovementType,
+        BreathingPattern, BreathingType, HeartbeatSignature, MovementProfile, MovementType,
+        VitalSignsReading,
     },
-    triage::{TriageStatus, TriageCalculator},
-    coordinates::{Coordinates3D, LocationUncertainty, DepthEstimate},
-    events::{DetectionEvent, AlertEvent, DomainEvent},
 };
 
 pub use detection::{
-    BreathingDetector, BreathingDetectorConfig,
-    HeartbeatDetector, HeartbeatDetectorConfig,
-    MovementClassifier, MovementClassifierConfig,
-    VitalSignsDetector, DetectionPipeline, DetectionConfig,
+    BreathingDetector, BreathingDetectorConfig, DetectionConfig, DetectionPipeline,
+    HeartbeatDetector, HeartbeatDetectorConfig, MovementClassifier, MovementClassifierConfig,
+    VitalSignsDetector,
 };
 
 pub use localization::{
-    Triangulator, TriangulationConfig,
-    DepthEstimator, DepthEstimatorConfig,
-    PositionFuser, LocalizationService,
+    DepthEstimator, DepthEstimatorConfig, LocalizationService, PositionFuser, TriangulationConfig,
+    Triangulator,
 };
 
 pub use alerting::{
-    AlertGenerator, AlertDispatcher, AlertConfig,
-    TriageService, PriorityCalculator,
+    AlertConfig, AlertDispatcher, AlertGenerator, PriorityCalculator, TriageService,
 };
 
 pub use integration::{
-    SignalAdapter, NeuralAdapter, HardwareAdapter,
-    AdapterError, IntegrationConfig,
+    AdapterError, HardwareAdapter, IntegrationConfig, NeuralAdapter, SignalAdapter,
 };
 
-pub use api::{
-    create_router, AppState,
-};
+pub use api::{create_router, AppState};
 
 pub use ml::{
-    // Core ML types
-    MlError, MlResult, MlDetectionConfig, MlDetectionPipeline, MlDetectionResult,
+    AttenuationPrediction,
+    BreathingClassification,
+    ClassifierOutput,
+    DebrisClassification,
+    DebrisFeatureExtractor,
+    DebrisFeatures,
+    DebrisModel,
+    DebrisModelConfig,
     // Debris penetration model
-    DebrisPenetrationModel, DebrisFeatures, DepthEstimate as MlDepthEstimate,
-    DebrisModel, DebrisModelConfig, DebrisFeatureExtractor,
-    MaterialType, DebrisClassification, AttenuationPrediction,
+    DebrisPenetrationModel,
+    DepthEstimate as MlDepthEstimate,
+    HeartbeatClassification,
+    MaterialType,
+    MlDetectionConfig,
+    MlDetectionPipeline,
+    MlDetectionResult,
+    // Core ML types
+    MlError,
+    MlResult,
+    UncertaintyEstimate,
     // Vital signs classifier
-    VitalSignsClassifier, VitalSignsClassifierConfig,
-    BreathingClassification, HeartbeatClassification,
-    UncertaintyEstimate, ClassifierOutput,
+    VitalSignsClassifier,
+    VitalSignsClassifierConfig,
 };
 
 /// Library version
@@ -314,18 +321,18 @@ impl DisasterResponse {
         location: geo::Point<f64>,
         description: &str,
     ) -> Result<&DisasterEvent> {
-        let event = DisasterEvent::new(
-            self.config.disaster_type.clone(),
-            location,
-            description,
-        );
+        let event = DisasterEvent::new(self.config.disaster_type.clone(), location, description);
         self.event = Some(event);
-        self.event.as_ref().ok_or_else(|| MatError::Domain("Failed to create event".into()))
+        self.event
+            .as_ref()
+            .ok_or_else(|| MatError::Domain("Failed to create event".into()))
     }
 
     /// Add a scan zone to the current event
     pub fn add_zone(&mut self, zone: ScanZone) -> Result<()> {
-        let event = self.event.as_mut()
+        let event = self
+            .event
+            .as_mut()
             .ok_or_else(|| MatError::Domain("No active disaster event".into()))?;
         event.add_zone(zone);
         Ok(())
@@ -344,9 +351,10 @@ impl DisasterResponse {
                 break;
             }
 
-            tokio::time::sleep(
-                std::time::Duration::from_millis(self.config.scan_interval_ms)
-            ).await;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                self.config.scan_interval_ms,
+            ))
+            .await;
         }
 
         Ok(())
@@ -364,7 +372,9 @@ impl DisasterResponse {
         let mut detections = Vec::new();
 
         {
-            let event = self.event.as_ref()
+            let event = self
+                .event
+                .as_ref()
                 .ok_or_else(|| MatError::Domain("No active disaster event".into()))?;
 
             for zone in event.zones() {
@@ -378,7 +388,8 @@ impl DisasterResponse {
 
                 if let Some(vital_signs) = detection_result {
                     // Attempt localization
-                    let location = self.localization_service
+                    let location = self
+                        .localization_service
                         .estimate_position(&vital_signs, zone);
 
                     detections.push((zone.id().clone(), vital_signs, location));
@@ -387,7 +398,9 @@ impl DisasterResponse {
         }
 
         // Now process detections with mutable access
-        let event = self.event.as_mut()
+        let event = self
+            .event
+            .as_mut()
             .ok_or_else(|| MatError::Domain("No active disaster event".into()))?;
 
         for (zone_id, vital_signs, location) in detections {
@@ -410,7 +423,8 @@ impl DisasterResponse {
 
     /// Get all detected survivors
     pub fn survivors(&self) -> Vec<&Survivor> {
-        self.event.as_ref()
+        self.event
+            .as_ref()
             .map(|e| e.survivors())
             .unwrap_or_default()
     }
@@ -427,23 +441,41 @@ impl DisasterResponse {
 /// Prelude module for convenient imports
 pub mod prelude {
     pub use crate::{
-        DisasterConfig, DisasterConfigBuilder, DisasterResponse,
-        MatError, Result,
-        // Domain types
-        Survivor, SurvivorId, DisasterEvent, DisasterType,
-        ScanZone, ZoneBounds, TriageStatus,
-        VitalSignsReading, BreathingPattern, HeartbeatSignature,
-        Coordinates3D, Alert, Priority,
-        // Detection
-        DetectionPipeline, VitalSignsDetector,
-        // Localization
-        LocalizationService,
+        Alert,
         // Alerting
         AlertDispatcher,
+        BreathingPattern,
+        Coordinates3D,
+        DebrisClassification,
+        DebrisModel,
+        // Detection
+        DetectionPipeline,
+        DisasterConfig,
+        DisasterConfigBuilder,
+        DisasterEvent,
+        DisasterResponse,
+        DisasterType,
+        HeartbeatSignature,
+        // Localization
+        LocalizationService,
+        MatError,
+        MaterialType,
         // ML types
-        MlDetectionConfig, MlDetectionPipeline, MlDetectionResult,
-        DebrisModel, MaterialType, DebrisClassification,
-        VitalSignsClassifier, UncertaintyEstimate,
+        MlDetectionConfig,
+        MlDetectionPipeline,
+        MlDetectionResult,
+        Priority,
+        Result,
+        ScanZone,
+        // Domain types
+        Survivor,
+        SurvivorId,
+        TriageStatus,
+        UncertaintyEstimate,
+        VitalSignsClassifier,
+        VitalSignsDetector,
+        VitalSignsReading,
+        ZoneBounds,
     };
 }
 
@@ -468,15 +500,11 @@ mod tests {
 
     #[test]
     fn test_sensitivity_clamping() {
-        let config = DisasterConfig::builder()
-            .sensitivity(1.5)
-            .build();
+        let config = DisasterConfig::builder().sensitivity(1.5).build();
 
         assert!((config.sensitivity - 1.0).abs() < f64::EPSILON);
 
-        let config = DisasterConfig::builder()
-            .sensitivity(-0.5)
-            .build();
+        let config = DisasterConfig::builder().sensitivity(-0.5).build();
 
         assert!(config.sensitivity.abs() < f64::EPSILON);
     }

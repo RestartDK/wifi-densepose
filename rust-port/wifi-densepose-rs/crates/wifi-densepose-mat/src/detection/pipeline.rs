@@ -3,14 +3,13 @@
 //! This module provides both traditional signal-processing-based detection
 //! and optional ML-enhanced detection for improved accuracy.
 
-use crate::domain::{ScanZone, VitalSignsReading, ConfidenceScore};
-use crate::ml::{MlDetectionConfig, MlDetectionPipeline, MlDetectionResult};
-use crate::{DisasterConfig, MatError};
 use super::{
-    BreathingDetector, BreathingDetectorConfig,
-    HeartbeatDetector, HeartbeatDetectorConfig,
+    BreathingDetector, BreathingDetectorConfig, HeartbeatDetector, HeartbeatDetectorConfig,
     MovementClassifier, MovementClassifierConfig,
 };
+use crate::domain::{ConfidenceScore, ScanZone, VitalSignsReading};
+use crate::ml::{MlDetectionConfig, MlDetectionPipeline, MlDetectionResult};
+use crate::{DisasterConfig, MatError};
 
 /// Configuration for the detection pipeline
 #[derive(Debug, Clone)]
@@ -184,7 +183,10 @@ impl DetectionPipeline {
     }
 
     /// Process a scan zone and return detected vital signs
-    pub async fn process_zone(&self, zone: &ScanZone) -> Result<Option<VitalSignsReading>, MatError> {
+    pub async fn process_zone(
+        &self,
+        zone: &ScanZone,
+    ) -> Result<Option<VitalSignsReading>, MatError> {
         // In a real implementation, this would:
         // 1. Collect CSI data from sensors in the zone
         // 2. Preprocess the data
@@ -287,31 +289,29 @@ impl DetectionPipeline {
         _zone: &ScanZone,
     ) -> Result<Option<VitalSignsReading>, MatError> {
         // Detect breathing
-        let breathing = self.breathing_detector.detect(
-            &buffer.amplitudes,
-            buffer.sample_rate,
-        );
+        let breathing = self
+            .breathing_detector
+            .detect(&buffer.amplitudes, buffer.sample_rate);
 
         // Detect heartbeat (if enabled)
         let heartbeat = if self.config.enable_heartbeat {
             let breathing_rate = breathing.as_ref().map(|b| b.rate_bpm as f64);
-            self.heartbeat_detector.detect(
-                &buffer.phases,
-                buffer.sample_rate,
-                breathing_rate,
-            )
+            self.heartbeat_detector
+                .detect(&buffer.phases, buffer.sample_rate, breathing_rate)
         } else {
             None
         };
 
         // Classify movement
-        let movement = self.movement_classifier.classify(
-            &buffer.amplitudes,
-            buffer.sample_rate,
-        );
+        let movement = self
+            .movement_classifier
+            .classify(&buffer.amplitudes, buffer.sample_rate);
 
         // Check if we detected anything
-        if breathing.is_none() && heartbeat.is_none() && movement.movement_type == crate::domain::MovementType::None {
+        if breathing.is_none()
+            && heartbeat.is_none()
+            && movement.movement_type == crate::domain::MovementType::None
+        {
             return Ok(None);
         }
 
@@ -353,31 +353,27 @@ impl DetectionPipeline {
 impl VitalSignsDetector for DetectionPipeline {
     fn detect(&self, csi_data: &CsiDataBuffer) -> Option<VitalSignsReading> {
         // Detect breathing from amplitude variations
-        let breathing = self.breathing_detector.detect(
-            &csi_data.amplitudes,
-            csi_data.sample_rate,
-        );
+        let breathing = self
+            .breathing_detector
+            .detect(&csi_data.amplitudes, csi_data.sample_rate);
 
         // Detect heartbeat from phase variations
         let heartbeat = if self.config.enable_heartbeat {
             let breathing_rate = breathing.as_ref().map(|b| b.rate_bpm as f64);
-            self.heartbeat_detector.detect(
-                &csi_data.phases,
-                csi_data.sample_rate,
-                breathing_rate,
-            )
+            self.heartbeat_detector
+                .detect(&csi_data.phases, csi_data.sample_rate, breathing_rate)
         } else {
             None
         };
 
         // Classify movement
-        let movement = self.movement_classifier.classify(
-            &csi_data.amplitudes,
-            csi_data.sample_rate,
-        );
+        let movement = self
+            .movement_classifier
+            .classify(&csi_data.amplitudes, csi_data.sample_rate);
 
         // Create reading if we detected anything
-        if breathing.is_some() || heartbeat.is_some()
+        if breathing.is_some()
+            || heartbeat.is_some()
             || movement.movement_type != crate::domain::MovementType::None
         {
             Some(VitalSignsReading::new(breathing, heartbeat, movement))
@@ -452,9 +448,7 @@ mod tests {
 
     #[test]
     fn test_config_from_disaster_config() {
-        let disaster_config = DisasterConfig::builder()
-            .sensitivity(0.9)
-            .build();
+        let disaster_config = DisasterConfig::builder().sensitivity(0.9).build();
 
         let detection_config = DetectionConfig::from_disaster_config(&disaster_config);
 

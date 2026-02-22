@@ -155,7 +155,9 @@ impl TranslatorConfig {
             return Err(NnError::config("output_channels must be positive"));
         }
         if self.use_attention && self.attention_heads == 0 {
-            return Err(NnError::config("attention_heads must be positive when using attention"));
+            return Err(NnError::config(
+                "attention_heads must be positive when using attention",
+            ));
         }
         Ok(())
     }
@@ -258,7 +260,12 @@ impl ModalityTranslator {
     }
 
     /// Get expected input shape
-    pub fn expected_input_shape(&self, batch_size: usize, height: usize, width: usize) -> TensorShape {
+    pub fn expected_input_shape(
+        &self,
+        batch_size: usize,
+        height: usize,
+        width: usize,
+    ) -> TensorShape {
         TensorShape::new(vec![batch_size, self.config.input_channels, height, width])
     }
 
@@ -332,14 +339,20 @@ impl ModalityTranslator {
         let out_height = shape.dim(2).unwrap_or(1) * 2_usize.pow(encoded_features.len() as u32 - 1);
         let out_width = shape.dim(3).unwrap_or(1) * 2_usize.pow(encoded_features.len() as u32 - 1);
 
-        Ok(Tensor::zeros_4d([batch, self.config.output_channels, out_height, out_width]))
+        Ok(Tensor::zeros_4d([
+            batch,
+            self.config.output_channels,
+            out_height,
+            out_width,
+        ]))
     }
 
     /// Native forward pass with weights
     fn forward_native(&self, input: &Tensor) -> NnResult<TranslatorOutput> {
-        let weights = self.weights.as_ref().ok_or_else(|| {
-            NnError::inference("No weights loaded for native inference")
-        })?;
+        let weights = self
+            .weights
+            .as_ref()
+            .ok_or_else(|| NnError::inference("No weights loaded for native inference"))?;
 
         let input_arr = input.as_array4()?;
         let (batch, _channels, height, width) = input_arr.dim();
@@ -432,8 +445,12 @@ impl ModalityTranslator {
                                         && iw >= self.config.padding
                                         && iw < in_width + self.config.padding
                                     {
-                                        let input_val =
-                                            input[[b, ic, ih - self.config.padding, iw - self.config.padding]];
+                                        let input_val = input[[
+                                            b,
+                                            ic,
+                                            ih - self.config.padding,
+                                            iw - self.config.padding,
+                                        ]];
                                         sum += input_val * weights.conv_weight[[oc, ic, kh, kw]];
                                     }
                                 }
@@ -554,13 +571,21 @@ impl ModalityTranslator {
         }
 
         // For simplicity, return input unchanged with identity attention
-        let attention_weights = Array4::from_elem((batch, self.config.attention_heads, seq_len, seq_len), 1.0 / seq_len as f32);
+        let attention_weights = Array4::from_elem(
+            (batch, self.config.attention_heads, seq_len, seq_len),
+            1.0 / seq_len as f32,
+        );
 
         Ok((input.clone(), attention_weights))
     }
 
     /// Compute translation loss between predicted and target features
-    pub fn compute_loss(&self, predicted: &Tensor, target: &Tensor, loss_type: LossType) -> NnResult<f32> {
+    pub fn compute_loss(
+        &self,
+        predicted: &Tensor,
+        target: &Tensor,
+        loss_type: LossType,
+    ) -> NnResult<f32> {
         let pred_arr = predicted.as_array4()?;
         let target_arr = target.as_array4()?;
 
@@ -707,10 +732,14 @@ mod tests {
         let pred = Tensor::ones_4d([1, 256, 8, 8]);
         let target = Tensor::zeros_4d([1, 256, 8, 8]);
 
-        let mse = translator.compute_loss(&pred, &target, LossType::MSE).unwrap();
+        let mse = translator
+            .compute_loss(&pred, &target, LossType::MSE)
+            .unwrap();
         assert_eq!(mse, 1.0);
 
-        let l1 = translator.compute_loss(&pred, &target, LossType::L1).unwrap();
+        let l1 = translator
+            .compute_loss(&pred, &target, LossType::L1)
+            .unwrap();
         assert_eq!(l1, 1.0);
     }
 }

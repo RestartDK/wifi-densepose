@@ -53,6 +53,7 @@ rustfft = "6.1"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 tracing = "0.1"
 parking_lot = "0.12"
+serialport = { workspace = true }
 
 # Geo calculations
 geo = "0.27"

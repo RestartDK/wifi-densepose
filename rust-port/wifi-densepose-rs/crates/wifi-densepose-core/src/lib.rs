@@ -52,19 +52,29 @@ pub mod types;
 pub mod utils;
 
 // Re-export commonly used types at the crate root
-pub use error::{CoreError, CoreResult, SignalError, InferenceError, StorageError};
-pub use traits::{SignalProcessor, NeuralInference, DataStore};
+pub use error::{CoreError, CoreResult, InferenceError, SignalError, StorageError};
+pub use traits::{DataStore, NeuralInference, SignalProcessor};
 pub use types::{
-    // CSI types
-    CsiFrame, CsiMetadata, AntennaConfig,
-    // Signal types
-    ProcessedSignal, SignalFeatures, FrequencyBand,
-    // Pose types
-    PoseEstimate, PersonPose, Keypoint, KeypointType,
-    // Common types
-    Confidence, Timestamp, FrameId, DeviceId,
+    AntennaConfig,
     // Bounding box
     BoundingBox,
+    // Common types
+    Confidence,
+    // CSI types
+    CsiFrame,
+    CsiMetadata,
+    DeviceId,
+    FrameId,
+    FrequencyBand,
+    Keypoint,
+    KeypointType,
+    PersonPose,
+    // Pose types
+    PoseEstimate,
+    // Signal types
+    ProcessedSignal,
+    SignalFeatures,
+    Timestamp,
 };
 
 /// Crate version

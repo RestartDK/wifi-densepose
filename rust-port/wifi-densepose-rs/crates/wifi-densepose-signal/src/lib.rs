@@ -42,7 +42,7 @@ pub use csi_processor::{
     CsiProcessorConfigBuilder, CsiProcessorError,
 };
 pub use features::{
-    AmplitudeFeatures, CsiFeatures, CorrelationFeatures, DopplerFeatures, FeatureExtractor,
+    AmplitudeFeatures, CorrelationFeatures, CsiFeatures, DopplerFeatures, FeatureExtractor,
     FeatureExtractorConfig, PhaseFeatures, PowerSpectralDensity,
 };
 pub use motion::{

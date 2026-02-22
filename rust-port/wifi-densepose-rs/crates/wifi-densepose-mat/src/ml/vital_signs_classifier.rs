@@ -24,18 +24,18 @@
 use super::{MlError, MlResult};
 use crate::detection::CsiDataBuffer;
 use crate::domain::{
-    BreathingPattern, BreathingType, HeartbeatSignature, MovementProfile,
-    MovementType, SignalStrength, VitalSignsReading,
+    BreathingPattern, BreathingType, HeartbeatSignature, MovementProfile, MovementType,
+    SignalStrength, VitalSignsReading,
 };
-use ndarray::{Array1, Array2, Array4, s};
+use ndarray::{s, Array1, Array2, Array4};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use parking_lot::RwLock;
 use tracing::{debug, info, instrument, warn};
 
 #[cfg(feature = "onnx")]
-use wifi_densepose_nn::{OnnxBackend, OnnxSession, InferenceOptions, Tensor, TensorShape};
+use wifi_densepose_nn::{InferenceOptions, OnnxBackend, OnnxSession, Tensor, TensorShape};
 
 /// Configuration for the vital signs classifier
 #[derive(Debug, Clone)]
@@ -94,7 +94,8 @@ impl VitalSignsFeatures {
         let mut features = Vec::with_capacity(256);
 
         // Add amplitude features (64)
-        features.extend_from_slice(&self.amplitude_features[..self.amplitude_features.len().min(64)]);
+        features
+            .extend_from_slice(&self.amplitude_features[..self.amplitude_features.len().min(64)]);
         features.resize(64, 0.0);
 
         // Add phase features (64)
@@ -255,15 +256,24 @@ pub struct ClassifierOutput {
 impl ClassifierOutput {
     /// Convert to domain VitalSignsReading
     pub fn to_vital_signs_reading(&self) -> Option<VitalSignsReading> {
-        let breathing = self.breathing.as_ref()
+        let breathing = self
+            .breathing
+            .as_ref()
             .and_then(|b| b.to_breathing_pattern());
-        let heartbeat = self.heartbeat.as_ref()
+        let heartbeat = self
+            .heartbeat
+            .as_ref()
             .and_then(|h| h.to_heartbeat_signature());
-        let movement = self.movement.as_ref()
+        let movement = self
+            .movement
+            .as_ref()
             .map(|m| m.to_movement_profile())
             .unwrap_or_default();
 
-        if breathing.is_none() && heartbeat.is_none() && movement.movement_type == MovementType::None {
+        if breathing.is_none()
+            && heartbeat.is_none()
+            && movement.movement_type == MovementType::None
+        {
             return None;
         }
 
@@ -330,7 +340,7 @@ impl BandpassFilter {
 
     /// Apply bandpass filter (simplified FFT-based approach)
     fn apply(&self, signal: &[f64]) -> Vec<f64> {
-        use rustfft::{FftPlanner, num_complex::Complex};
+        use rustfft::{num_complex::Complex, FftPlanner};
 
         if signal.len() < 8 {
             return signal.to_vec();
@@ -338,9 +348,7 @@ impl BandpassFilter {
 
         // Pad to power of 2
         let n = signal.len().next_power_of_two();
-        let mut buffer: Vec<Complex<f64>> = signal.iter()
-            .map(|&x| Complex::new(x, 0.0))
-            .collect();
+        let mut buffer: Vec<Complex<f64>> = signal.iter().map(|&x| Complex::new(x, 0.0)).collect();
         buffer.resize(n, Complex::new(0.0, 0.0));
 
         // Forward FFT
@@ -367,7 +375,8 @@ impl BandpassFilter {
         ifft.process(&mut buffer);
 
         // Normalize and extract real part
-        buffer.iter()
+        buffer
+            .iter()
             .take(signal.len())
             .map(|c| c.re / n as f64)
             .collect()
@@ -383,7 +392,10 @@ impl BandpassFilter {
 impl VitalSignsClassifier {
     /// Create classifier from ONNX model file
     #[instrument(skip(path))]
-    pub fn from_onnx<P: AsRef<Path>>(path: P, config: VitalSignsClassifierConfig) -> MlResult<Self> {
+    pub fn from_onnx<P: AsRef<Path>>(
+        path: P,
+        config: VitalSignsClassifierConfig,
+    ) -> MlResult<Self> {
         let path_ref = path.as_ref();
         info!(?path_ref, "Loading vital signs classifier");
 
@@ -459,16 +471,16 @@ impl VitalSignsClassifier {
         let phase_features = self.extract_time_features(&buffer.phases);
 
         // Extract spectral features
-        let spectral_features = self.extract_spectral_features(&buffer.amplitudes, buffer.sample_rate);
+        let spectral_features =
+            self.extract_spectral_features(&buffer.amplitudes, buffer.sample_rate);
 
         // Calculate band powers
         let breathing_band_power = breathing_filter.band_power(&buffer.amplitudes) as f32;
         let heartbeat_band_power = heartbeat_filter.band_power(&buffer.phases) as f32;
 
         // Movement detection using broadband power
-        let movement_band_power = buffer.amplitudes.iter()
-            .map(|x| x.powi(2))
-            .sum::<f64>() as f32 / buffer.amplitudes.len() as f32;
+        let movement_band_power = buffer.amplitudes.iter().map(|x| x.powi(2)).sum::<f64>() as f32
+            / buffer.amplitudes.len() as f32;
 
         // Signal quality
         let signal_quality = self.estimate_signal_quality(&buffer.amplitudes);
@@ -493,9 +505,7 @@ impl VitalSignsClassifier {
 
         let n = signal.len();
         let mean = signal.iter().sum::<f64>() / n as f64;
-        let variance = signal.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / n as f64;
+        let variance = signal.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n as f64;
         let std_dev = variance.sqrt();
 
         let mut features = Vec::with_capacity(64);
@@ -514,9 +524,11 @@ impl VitalSignsClassifier {
 
         // Skewness
         let skewness = if std_dev > 1e-10 {
-            signal.iter()
+            signal
+                .iter()
                 .map(|x| ((x - mean) / std_dev).powi(3))
-                .sum::<f64>() / n as f64
+                .sum::<f64>()
+                / n as f64
         } else {
             0.0
         };
@@ -524,16 +536,20 @@ impl VitalSignsClassifier {
 
         // Kurtosis
         let kurtosis = if std_dev > 1e-10 {
-            signal.iter()
+            signal
+                .iter()
                 .map(|x| ((x - mean) / std_dev).powi(4))
-                .sum::<f64>() / n as f64 - 3.0
+                .sum::<f64>()
+                / n as f64
+                - 3.0
         } else {
             0.0
         };
         features.push(kurtosis as f32);
 
         // Zero crossing rate
-        let zero_crossings = signal.windows(2)
+        let zero_crossings = signal
+            .windows(2)
             .filter(|w| (w[0] - mean) * (w[1] - mean) < 0.0)
             .count();
         features.push(zero_crossings as f32 / n as f32);
@@ -555,14 +571,15 @@ impl VitalSignsClassifier {
 
     /// Extract frequency-domain features
     fn extract_spectral_features(&self, signal: &[f64], sample_rate: f64) -> Vec<f32> {
-        use rustfft::{FftPlanner, num_complex::Complex};
+        use rustfft::{num_complex::Complex, FftPlanner};
 
         if signal.len() < 16 {
             return vec![0.0; 64];
         }
 
         let n = 128.min(signal.len().next_power_of_two());
-        let mut buffer: Vec<Complex<f64>> = signal.iter()
+        let mut buffer: Vec<Complex<f64>> = signal
+            .iter()
             .take(n)
             .map(|&x| Complex::new(x, 0.0))
             .collect();
@@ -579,7 +596,8 @@ impl VitalSignsClassifier {
         fft.process(&mut buffer);
 
         // Extract power spectrum (first half)
-        let mut features: Vec<f32> = buffer.iter()
+        let mut features: Vec<f32> = buffer
+            .iter()
             .take(n / 2)
             .map(|c| (c.norm() / n as f64) as f32)
             .collect();
@@ -589,9 +607,10 @@ impl VitalSignsClassifier {
 
         // Find dominant frequency
         let freq_resolution = sample_rate / n as f64;
-        let (max_idx, _) = features.iter()
+        let (max_idx, _) = features
+            .iter()
             .enumerate()
-            .skip(1)  // Skip DC
+            .skip(1) // Skip DC
             .take(30) // Up to ~30% of Nyquist
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
             .unwrap_or((0, &0.0));
@@ -609,9 +628,7 @@ impl VitalSignsClassifier {
         }
 
         let mean = signal.iter().sum::<f64>() / signal.len() as f64;
-        let variance = signal.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / signal.len() as f64;
+        let variance = signal.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / signal.len() as f64;
 
         // Higher SNR = higher quality
         let snr = if variance > 1e-10 {
@@ -645,10 +662,8 @@ impl VitalSignsClassifier {
         let input_tensor = features.to_tensor();
 
         // Create 4D tensor for model input
-        let input_array = Array4::from_shape_vec(
-            (1, 1, 1, input_tensor.len()),
-            input_tensor,
-        ).map_err(|e| MlError::Inference(e.to_string()))?;
+        let input_array = Array4::from_shape_vec((1, 1, 1, input_tensor.len()), input_tensor)
+            .map_err(|e| MlError::Inference(e.to_string()))?;
 
         let tensor = Tensor::Float4D(input_array);
 
@@ -664,7 +679,9 @@ impl VitalSignsClassifier {
 
         let mut all_outputs = Vec::with_capacity(mc_samples);
         for _ in 0..mc_samples {
-            let outputs = session.write().run(inputs.clone())
+            let outputs = session
+                .write()
+                .run(inputs.clone())
                 .map_err(|e| MlError::NeuralNetwork(e))?;
             all_outputs.push(outputs);
         }
@@ -700,14 +717,14 @@ impl VitalSignsClassifier {
             breathing.as_ref().map(|b| b.confidence),
             heartbeat.as_ref().map(|h| h.confidence),
             movement.as_ref().map(|m| m.confidence),
-        ].iter()
-            .filter_map(|&c| c)
-            .sum::<f32>() / 3.0;
+        ]
+        .iter()
+        .filter_map(|&c| c)
+        .sum::<f32>()
+            / 3.0;
 
-        let combined_uncertainty = UncertaintyEstimate::new(
-            1.0 - overall_confidence,
-            1.0 - features.signal_quality,
-        );
+        let combined_uncertainty =
+            UncertaintyEstimate::new(1.0 - overall_confidence, 1.0 - features.signal_quality);
 
         Ok(ClassifierOutput {
             breathing,
@@ -719,7 +736,10 @@ impl VitalSignsClassifier {
     }
 
     /// Rule-based breathing classification
-    fn classify_breathing_rules(&self, features: &VitalSignsFeatures) -> Option<BreathingClassification> {
+    fn classify_breathing_rules(
+        &self,
+        features: &VitalSignsFeatures,
+    ) -> Option<BreathingClassification> {
         // Check if breathing band has sufficient power
         if features.breathing_band_power < 0.01 || features.signal_quality < 0.2 {
             return None;
@@ -745,10 +765,7 @@ impl VitalSignsClassifier {
 
         // Uncertainty estimation
         let rate_uncertainty = breathing_rate * (1.0 - confidence) * 0.2;
-        let uncertainty = UncertaintyEstimate::new(
-            1.0 - confidence,
-            1.0 - features.signal_quality,
-        );
+        let uncertainty = UncertaintyEstimate::new(1.0 - confidence, 1.0 - features.signal_quality);
 
         Some(BreathingClassification {
             breathing_type,
@@ -775,15 +792,19 @@ impl VitalSignsClassifier {
             dominant_freq * 60.0
         } else {
             // Estimate from band power ratio
-            let power_ratio = features.breathing_band_power /
-                (features.movement_band_power + 0.001);
+            let power_ratio =
+                features.breathing_band_power / (features.movement_band_power + 0.001);
             let estimated = 12.0 + power_ratio * 8.0;
             estimated.clamp(6.0, 30.0)
         }
     }
 
     /// Classify breathing type from rate and features
-    fn classify_breathing_type(&self, rate_bpm: f32, features: &VitalSignsFeatures) -> BreathingType {
+    fn classify_breathing_type(
+        &self,
+        rate_bpm: f32,
+        features: &VitalSignsFeatures,
+    ) -> BreathingType {
         // Use rate and signal characteristics
         if rate_bpm < 6.0 {
             BreathingType::Agonal
@@ -793,14 +814,15 @@ impl VitalSignsClassifier {
             BreathingType::Labored
         } else {
             // Check regularity using spectral features
-            let power_variance: f32 = features.spectral_features.iter()
+            let power_variance: f32 = features
+                .spectral_features
+                .iter()
                 .take(10)
                 .map(|&x| x.powi(2))
-                .sum::<f32>() / 10.0;
+                .sum::<f32>()
+                / 10.0;
 
-            let mean_power: f32 = features.spectral_features.iter()
-                .take(10)
-                .sum::<f32>() / 10.0;
+            let mean_power: f32 = features.spectral_features.iter().take(10).sum::<f32>() / 10.0;
 
             let regularity = 1.0 - (power_variance / (mean_power.powi(2) + 0.001)).min(1.0);
 
@@ -813,7 +835,11 @@ impl VitalSignsClassifier {
     }
 
     /// Compute breathing class probabilities
-    fn compute_breathing_probabilities(&self, rate_bpm: f32, features: &VitalSignsFeatures) -> Vec<f32> {
+    fn compute_breathing_probabilities(
+        &self,
+        rate_bpm: f32,
+        features: &VitalSignsFeatures,
+    ) -> Vec<f32> {
         let mut probs = vec![0.0; 6]; // Normal, Shallow, Labored, Irregular, Agonal, Apnea
 
         // Simple probability assignment based on rate
@@ -839,7 +865,10 @@ impl VitalSignsClassifier {
     }
 
     /// Rule-based heartbeat classification
-    fn classify_heartbeat_rules(&self, features: &VitalSignsFeatures) -> Option<HeartbeatClassification> {
+    fn classify_heartbeat_rules(
+        &self,
+        features: &VitalSignsFeatures,
+    ) -> Option<HeartbeatClassification> {
         // Heartbeat detection requires stronger signal
         if features.heartbeat_band_power < 0.005 || features.signal_quality < 0.3 {
             return None;
@@ -875,10 +904,7 @@ impl VitalSignsClassifier {
 
         let rate_uncertainty = heart_rate * (1.0 - confidence) * 0.15;
 
-        let uncertainty = UncertaintyEstimate::new(
-            1.0 - confidence,
-            1.0 - features.signal_quality,
-        );
+        let uncertainty = UncertaintyEstimate::new(1.0 - confidence, 1.0 - features.signal_quality);
 
         Some(HeartbeatClassification {
             rate_bpm: heart_rate,
@@ -893,14 +919,16 @@ impl VitalSignsClassifier {
     /// Estimate heart rate from features
     fn estimate_heart_rate(&self, features: &VitalSignsFeatures) -> f32 {
         // Heart rate from phase variations
-        let phase_power = features.phase_features.iter()
+        let phase_power = features
+            .phase_features
+            .iter()
             .take(10)
             .map(|&x| x.abs())
-            .sum::<f32>() / 10.0;
+            .sum::<f32>()
+            / 10.0;
 
         // Estimate based on heartbeat band power ratio
-        let power_ratio = features.heartbeat_band_power /
-            (features.breathing_band_power + 0.001);
+        let power_ratio = features.heartbeat_band_power / (features.breathing_band_power + 0.001);
 
         // Base rate estimation (simplified)
         let base_rate = 70.0 + phase_power * 20.0;
@@ -916,7 +944,10 @@ impl VitalSignsClassifier {
     }
 
     /// Rule-based movement classification
-    fn classify_movement_rules(&self, features: &VitalSignsFeatures) -> Option<MovementClassification> {
+    fn classify_movement_rules(
+        &self,
+        features: &VitalSignsFeatures,
+    ) -> Option<MovementClassification> {
         let intensity = (features.movement_band_power * 2.0).min(1.0);
 
         if intensity < 0.05 {
@@ -1076,7 +1107,10 @@ mod tests {
 
         // Check that filtered signal is not all zeros
         let filtered_energy: f64 = filtered.iter().map(|x| x.powi(2)).sum();
-        assert!(filtered_energy >= 0.0, "Filtered energy should be non-negative");
+        assert!(
+            filtered_energy >= 0.0,
+            "Filtered energy should be non-negative"
+        );
 
         // The band power should be non-negative
         let power = filter.band_power(&signal);

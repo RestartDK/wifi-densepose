@@ -1,13 +1,10 @@
 //! Disaster event aggregate root.
 
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 use geo::Point;
+use uuid::Uuid;
 
-use super::{
-    Survivor, SurvivorId, ScanZone, ScanZoneId,
-    VitalSignsReading, Coordinates3D,
-};
+use super::{Coordinates3D, ScanZone, ScanZoneId, Survivor, SurvivorId, VitalSignsReading};
 use crate::MatError;
 
 /// Unique identifier for a disaster event
@@ -66,7 +63,7 @@ pub enum DisasterType {
 impl DisasterType {
     /// Get typical debris profile for this disaster type
     pub fn typical_debris_profile(&self) -> super::DebrisProfile {
-        use super::{DebrisProfile, DebrisMaterial, MoistureLevel, MetalContent};
+        use super::{DebrisMaterial, DebrisProfile, MetalContent, MoistureLevel};
 
         match self {
             DisasterType::BuildingCollapse => DebrisProfile {
@@ -118,9 +115,9 @@ impl DisasterType {
     /// Get expected maximum survival time (hours)
     pub fn expected_survival_hours(&self) -> u32 {
         match self {
-            DisasterType::Avalanche => 2,        // Limited air, hypothermia
-            DisasterType::Flood => 6,            // Drowning risk
-            DisasterType::MineCollapse => 72,    // Air supply critical
+            DisasterType::Avalanche => 2,     // Limited air, hypothermia
+            DisasterType::Flood => 6,         // Drowning risk
+            DisasterType::MineCollapse => 72, // Air supply critical
             DisasterType::BuildingCollapse => 96,
             DisasterType::Earthquake => 120,
             DisasterType::Landslide => 48,
@@ -188,11 +185,7 @@ pub struct EventMetadata {
 
 impl DisasterEvent {
     /// Create a new disaster event
-    pub fn new(
-        event_type: DisasterType,
-        location: Point<f64>,
-        description: &str,
-    ) -> Self {
+    pub fn new(event_type: DisasterType, location: Point<f64>, description: &str) -> Self {
         Self {
             id: DisasterEventId::new(),
             event_type,
@@ -297,7 +290,9 @@ impl DisasterEvent {
 
         if let Some(existing) = existing_id {
             // Update existing survivor
-            let survivor = self.survivors.iter_mut()
+            let survivor = self
+                .survivors
+                .iter_mut()
                 .find(|s| s.id() == &existing)
                 .ok_or_else(|| MatError::Domain("Survivor not found".into()))?;
             survivor.update_vitals(vitals);
@@ -424,7 +419,7 @@ impl TriageCounts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ZoneBounds, BreathingPattern, BreathingType, ConfidenceScore};
+    use crate::domain::{BreathingPattern, BreathingType, ConfidenceScore, ZoneBounds};
 
     fn create_test_vitals() -> VitalSignsReading {
         VitalSignsReading {
@@ -455,11 +450,8 @@ mod tests {
 
     #[test]
     fn test_add_zone_activates_event() {
-        let mut event = DisasterEvent::new(
-            DisasterType::BuildingCollapse,
-            Point::new(0.0, 0.0),
-            "Test",
-        );
+        let mut event =
+            DisasterEvent::new(DisasterType::BuildingCollapse, Point::new(0.0, 0.0), "Test");
 
         assert_eq!(event.status(), &EventStatus::Initializing);
 
@@ -471,11 +463,7 @@ mod tests {
 
     #[test]
     fn test_record_detection() {
-        let mut event = DisasterEvent::new(
-            DisasterType::Earthquake,
-            Point::new(0.0, 0.0),
-            "Test",
-        );
+        let mut event = DisasterEvent::new(DisasterType::Earthquake, Point::new(0.0, 0.0), "Test");
 
         let zone = ScanZone::new("Zone A", ZoneBounds::rectangle(0.0, 0.0, 10.0, 10.0));
         let zone_id = zone.id().clone();
@@ -489,6 +477,9 @@ mod tests {
 
     #[test]
     fn test_disaster_type_survival_hours() {
-        assert!(DisasterType::Avalanche.expected_survival_hours() < DisasterType::Earthquake.expected_survival_hours());
+        assert!(
+            DisasterType::Avalanche.expected_survival_hours()
+                < DisasterType::Earthquake.expected_survival_hours()
+        );
     }
 }

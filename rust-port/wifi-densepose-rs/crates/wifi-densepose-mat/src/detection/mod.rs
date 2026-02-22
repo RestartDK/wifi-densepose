@@ -14,4 +14,4 @@ mod pipeline;
 pub use breathing::{BreathingDetector, BreathingDetectorConfig};
 pub use heartbeat::{HeartbeatDetector, HeartbeatDetectorConfig};
 pub use movement::{MovementClassifier, MovementClassifierConfig};
-pub use pipeline::{DetectionPipeline, DetectionConfig, VitalSignsDetector, CsiDataBuffer};
+pub use pipeline::{CsiDataBuffer, DetectionConfig, DetectionPipeline, VitalSignsDetector};

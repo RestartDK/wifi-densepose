@@ -10,10 +10,8 @@ use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::domain::{
-    DisasterEvent, Alert,
-};
 use super::dto::WebSocketMessage;
+use crate::domain::{Alert, DisasterEvent};
 
 /// Shared application state for the API.
 ///
@@ -202,7 +200,7 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{DisasterType, DisasterEvent};
+    use crate::domain::{DisasterEvent, DisasterType};
     use geo::Point;
 
     #[test]
@@ -225,11 +223,7 @@ mod tests {
     #[test]
     fn test_update_event() {
         let state = AppState::new();
-        let event = DisasterEvent::new(
-            DisasterType::Earthquake,
-            Point::new(0.0, 0.0),
-            "Test",
-        );
+        let event = DisasterEvent::new(DisasterType::Earthquake, Point::new(0.0, 0.0), "Test");
         let id = *event.id().as_uuid();
         state.store_event(event);
 

@@ -54,11 +54,8 @@ impl MovementClassifier {
         let periodicity = self.calculate_periodicity(csi_signal, sample_rate);
 
         // Determine movement type
-        let (movement_type, is_voluntary) = self.determine_movement_type(
-            variance,
-            max_change,
-            periodicity,
-        );
+        let (movement_type, is_voluntary) =
+            self.determine_movement_type(variance, max_change, periodicity);
 
         // Calculate intensity
         let intensity = self.calculate_intensity(variance, max_change);
@@ -81,9 +78,7 @@ impl MovementClassifier {
         }
 
         let mean = signal.iter().sum::<f64>() / signal.len() as f64;
-        let variance = signal.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / signal.len() as f64;
+        let variance = signal.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / signal.len() as f64;
 
         variance
     }
@@ -94,7 +89,8 @@ impl MovementClassifier {
             return 0.0;
         }
 
-        signal.windows(2)
+        signal
+            .windows(2)
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0, f64::max)
     }
@@ -120,7 +116,8 @@ impl MovementClassifier {
         let mut max_corr = 0.0;
 
         for lag in 1..max_lag {
-            let corr: f64 = centered.iter()
+            let corr: f64 = centered
+                .iter()
                 .take(n - lag)
                 .zip(centered.iter().skip(lag))
                 .map(|(a, b)| a * b)
@@ -197,7 +194,8 @@ impl MovementClassifier {
         let mean = signal.iter().sum::<f64>() / signal.len() as f64;
         let centered: Vec<f64> = signal.iter().map(|x| x - mean).collect();
 
-        let zero_crossings: usize = centered.windows(2)
+        let zero_crossings: usize = centered
+            .windows(2)
             .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
             .count();
 
@@ -259,15 +257,11 @@ mod tests {
         let classifier = MovementClassifier::with_defaults();
 
         // Low intensity
-        let low_signal: Vec<f64> = (0..200)
-            .map(|i| (i as f64 * 0.1).sin() * 0.05)
-            .collect();
+        let low_signal: Vec<f64> = (0..200).map(|i| (i as f64 * 0.1).sin() * 0.05).collect();
         let low_profile = classifier.classify(&low_signal, 100.0);
 
         // High intensity
-        let high_signal: Vec<f64> = (0..200)
-            .map(|i| (i as f64 * 0.1).sin() * 2.0)
-            .collect();
+        let high_signal: Vec<f64> = (0..200).map(|i| (i as f64 * 0.1).sin() * 2.0).collect();
         let high_profile = classifier.classify(&high_signal, 100.0);
 
         assert!(high_profile.intensity > low_profile.intensity);

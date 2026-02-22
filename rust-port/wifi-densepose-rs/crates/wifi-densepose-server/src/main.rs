@@ -35,6 +35,7 @@ use wifi_densepose_mat::{
     api::AppState as MatAppState,
     api::WebSocketMessage,
     domain::{SensorPosition, SensorType, SignalStrength},
+    integration::{DeviceSettings, HardwareAdapter, HardwareConfig},
     BreathingPattern, BreathingType, Coordinates3D, DisasterEvent, DisasterType,
     LocationUncertainty, MovementProfile, MovementType, ScanZone, VitalSignsReading,
 };
@@ -42,12 +43,17 @@ use wifi_densepose_mat::{
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:8787";
 const DEFAULT_ALLOWED_ORIGINS: &str = "http://localhost:5173,http://127.0.0.1:5173";
 const DEFAULT_POSE_HEARTBEAT_SECS: u64 = 2;
+const DEFAULT_ESP32_BAUD_RATE: u32 = 921_600;
+const DEFAULT_ESP32_READ_TIMEOUT_MS: u64 = 25;
 
 #[derive(Debug, Clone)]
 struct ServerConfig {
     bind_addr: SocketAddr,
     allowed_origins: Vec<String>,
     pose_heartbeat_secs: u64,
+    esp32_port: Option<String>,
+    esp32_baud_rate: u32,
+    esp32_read_timeout_ms: u64,
 }
 
 impl ServerConfig {
@@ -71,10 +77,33 @@ impl ServerConfig {
             .unwrap_or(DEFAULT_POSE_HEARTBEAT_SECS)
             .max(1);
 
+        let esp32_port = env::var("WIFI_DENSEPOSE_ESP32_PORT")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
+        let esp32_baud_rate = match env::var("WIFI_DENSEPOSE_ESP32_BAUD_RATE") {
+            Ok(value) => value
+                .parse::<u32>()
+                .context("failed to parse WIFI_DENSEPOSE_ESP32_BAUD_RATE")?,
+            Err(_) => DEFAULT_ESP32_BAUD_RATE,
+        };
+
+        let esp32_read_timeout_ms = match env::var("WIFI_DENSEPOSE_ESP32_READ_TIMEOUT_MS") {
+            Ok(value) => value
+                .parse::<u64>()
+                .context("failed to parse WIFI_DENSEPOSE_ESP32_READ_TIMEOUT_MS")?,
+            Err(_) => DEFAULT_ESP32_READ_TIMEOUT_MS,
+        }
+        .max(1);
+
         Ok(Self {
             bind_addr,
             allowed_origins,
             pose_heartbeat_secs,
+            esp32_port,
+            esp32_baud_rate,
+            esp32_read_timeout_ms,
         })
     }
 }
@@ -261,6 +290,8 @@ async fn main() -> anyhow::Result<()> {
     pose_provider.start_event_bridge();
     pose_provider.start_heartbeat(Duration::from_secs(config.pose_heartbeat_secs));
 
+    let _esp32_ingestion = start_esp32_ingestion_if_configured(&config).await?;
+
     let state = ServerState {
         mat_state: mat_state.clone(),
         pose_provider,
@@ -322,6 +353,65 @@ fn build_cors_layer(origins: &[String]) -> anyhow::Result<CorsLayer> {
         .allow_origin(AllowOrigin::list(parsed))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers(Any))
+}
+
+async fn start_esp32_ingestion_if_configured(
+    config: &ServerConfig,
+) -> anyhow::Result<Option<(HardwareAdapter, tokio::task::JoinHandle<()>)>> {
+    let Some(port) = config.esp32_port.clone() else {
+        return Ok(None);
+    };
+
+    let mut hardware_config = HardwareConfig::esp32(&port, config.esp32_baud_rate);
+    if let DeviceSettings::Serial(serial) = &mut hardware_config.device_settings {
+        serial.read_timeout_ms = config.esp32_read_timeout_ms;
+    }
+
+    let mut adapter = HardwareAdapter::with_config(hardware_config);
+    adapter
+        .initialize()
+        .await
+        .with_context(|| format!("failed to initialize ESP32 adapter on {}", port))?;
+
+    let mut stream = adapter
+        .start_csi_stream()
+        .await
+        .with_context(|| format!("failed to start ESP32 CSI stream on {}", port))?;
+
+    let stream_port = port.clone();
+    let stream_task = tokio::spawn(async move {
+        let mut packet_count = 0u64;
+        while let Some(reading) = stream.next().await {
+            packet_count += 1;
+
+            if packet_count == 1 || packet_count % 100 == 0 {
+                let subcarriers = reading
+                    .readings
+                    .first()
+                    .map(|sensor| sensor.amplitudes.len())
+                    .unwrap_or(0);
+
+                tracing::info!(
+                    port = %stream_port,
+                    packet_count,
+                    subcarriers,
+                    rssi = ?reading.metadata.rssi,
+                    "ESP32 CSI packet received"
+                );
+            }
+        }
+
+        tracing::warn!(port = %stream_port, "ESP32 CSI stream ended");
+    });
+
+    info!(
+        port = %port,
+        baud_rate = config.esp32_baud_rate,
+        read_timeout_ms = config.esp32_read_timeout_ms,
+        "ESP32 CSI ingestion enabled"
+    );
+
+    Ok(Some((adapter, stream_task)))
 }
 
 async fn healthz() -> &'static str {

@@ -746,7 +746,8 @@ impl MatDashboard {
                 // Fire callback
                 if let Some(callback) = &state.on_zone_updated {
                     let this = JsValue::NULL;
-                    let zone_value = serde_wasm_bindgen::to_value(&js_zone).unwrap_or(JsValue::NULL);
+                    let zone_value =
+                        serde_wasm_bindgen::to_value(&js_zone).unwrap_or(JsValue::NULL);
                     let _ = callback.call1(&this, &zone_value);
                 }
 
@@ -1231,10 +1232,10 @@ impl MatDashboard {
 
                         // Draw zone name at centroid
                         if !vertices.is_empty() {
-                            let cx: f64 =
-                                vertices.iter().map(|(x, _)| x).sum::<f64>() / vertices.len() as f64;
-                            let cy: f64 =
-                                vertices.iter().map(|(_, y)| y).sum::<f64>() / vertices.len() as f64;
+                            let cx: f64 = vertices.iter().map(|(x, _)| x).sum::<f64>()
+                                / vertices.len() as f64;
+                            let cy: f64 = vertices.iter().map(|(_, y)| y).sum::<f64>()
+                                / vertices.len() as f64;
                             ctx.set_fill_style_str("#ffffff");
                             ctx.set_font("12px sans-serif");
                             let _ = ctx.fill_text(&zone.name, cx - 20.0, cy);
@@ -1254,13 +1255,23 @@ impl MatDashboard {
 
         for survivor in state.survivors.values() {
             let color = survivor.triage_status.color();
-            let radius = if survivor.is_deteriorating { 12.0 } else { 10.0 };
+            let radius = if survivor.is_deteriorating {
+                12.0
+            } else {
+                10.0
+            };
 
             // Draw outer glow for urgent survivors
             if survivor.triage_status == JsTriageStatus::Immediate {
                 ctx.set_fill_style_str("rgba(255, 0, 0, 0.3)");
                 ctx.begin_path();
-                let _ = ctx.arc(survivor.x, survivor.y, radius + 8.0, 0.0, std::f64::consts::TAU);
+                let _ = ctx.arc(
+                    survivor.x,
+                    survivor.y,
+                    radius + 8.0,
+                    0.0,
+                    std::f64::consts::TAU,
+                );
                 ctx.fill();
             }
 

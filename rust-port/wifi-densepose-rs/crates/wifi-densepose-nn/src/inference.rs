@@ -319,7 +319,10 @@ impl<B: Backend> InferenceEngine<B> {
 
     /// Run inference with named inputs
     #[instrument(skip(self, inputs))]
-    pub fn infer_named(&self, inputs: HashMap<String, Tensor>) -> NnResult<HashMap<String, Tensor>> {
+    pub fn infer_named(
+        &self,
+        inputs: HashMap<String, Tensor>,
+    ) -> NnResult<HashMap<String, Tensor>> {
         let start = std::time::Instant::now();
 
         let result = self.backend.run(inputs)?;

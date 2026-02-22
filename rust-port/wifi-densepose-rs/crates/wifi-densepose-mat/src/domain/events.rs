@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 
 use super::{
-    AlertId, Coordinates3D, Priority, ScanZoneId, SurvivorId,
-    TriageStatus, VitalSignsReading, AlertResolution,
+    AlertId, AlertResolution, Coordinates3D, Priority, ScanZoneId, SurvivorId, TriageStatus,
+    VitalSignsReading,
 };
 
 /// All domain events in the system

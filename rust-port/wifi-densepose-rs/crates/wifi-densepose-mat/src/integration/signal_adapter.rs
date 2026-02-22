@@ -1,8 +1,8 @@
 //! Adapter for wifi-densepose-signal crate.
 
 use super::AdapterError;
-use crate::domain::{BreathingPattern, BreathingType};
 use crate::detection::CsiDataBuffer;
+use crate::domain::{BreathingPattern, BreathingType};
 
 /// Features extracted from signal for vital signs detection
 #[derive(Debug, Clone, Default)]
@@ -49,23 +49,15 @@ impl SignalAdapter {
     ) -> Result<VitalFeatures, AdapterError> {
         if csi_data.amplitudes.len() < self.window_size {
             return Err(AdapterError::Signal(
-                "Insufficient data for feature extraction".into()
+                "Insufficient data for feature extraction".into(),
             ));
         }
 
         // Extract breathing-range features (0.1-0.5 Hz)
-        let breathing_features = self.extract_frequency_band(
-            &csi_data.amplitudes,
-            0.1,
-            0.5,
-        )?;
+        let breathing_features = self.extract_frequency_band(&csi_data.amplitudes, 0.1, 0.5)?;
 
         // Extract heartbeat-range features (0.8-2.0 Hz)
-        let heartbeat_features = self.extract_frequency_band(
-            &csi_data.phases,
-            0.8,
-            2.0,
-        )?;
+        let heartbeat_features = self.extract_frequency_band(&csi_data.phases, 0.8, 2.0)?;
 
         // Extract movement features
         let movement_features = self.extract_movement_features(&csi_data.amplitudes)?;
@@ -82,10 +74,7 @@ impl SignalAdapter {
     }
 
     /// Convert upstream CsiFeatures to breathing pattern
-    pub fn to_breathing_pattern(
-        &self,
-        features: &VitalFeatures,
-    ) -> Option<BreathingPattern> {
+    pub fn to_breathing_pattern(&self, features: &VitalFeatures) -> Option<BreathingPattern> {
         if features.breathing_features.len() < 3 {
             return None;
         }
@@ -121,7 +110,7 @@ impl SignalAdapter {
         low_freq: f64,
         high_freq: f64,
     ) -> Result<Vec<f64>, AdapterError> {
-        use rustfft::{FftPlanner, num_complex::Complex};
+        use rustfft::{num_complex::Complex, FftPlanner};
 
         let n = signal.len().min(self.window_size);
         if n < 32 {
@@ -133,7 +122,8 @@ impl SignalAdapter {
         let fft = planner.plan_fft_forward(fft_size);
 
         // Prepare buffer with windowing
-        let mut buffer: Vec<Complex<f64>> = signal.iter()
+        let mut buffer: Vec<Complex<f64>> = signal
+            .iter()
             .take(n)
             .enumerate()
             .map(|(i, &x)| {
@@ -167,18 +157,26 @@ impl SignalAdapter {
             // Peak frequency
             features.push(peak_bin as f64 * freq_resolution);
             // Peak magnitude (normalized)
-            let total_power: f64 = buffer[1..buffer.len()/2]
+            let total_power: f64 = buffer[1..buffer.len() / 2]
                 .iter()
                 .map(|c| c.norm_sqr())
                 .sum();
-            features.push(if total_power > 0.0 { max_mag * max_mag / total_power } else { 0.0 });
+            features.push(if total_power > 0.0 {
+                max_mag * max_mag / total_power
+            } else {
+                0.0
+            });
 
             // Band power ratio
             let band_power: f64 = buffer[low_bin..=high_bin]
                 .iter()
                 .map(|c| c.norm_sqr())
                 .sum();
-            features.push(if total_power > 0.0 { band_power / total_power } else { 0.0 });
+            features.push(if total_power > 0.0 {
+                band_power / total_power
+            } else {
+                0.0
+            });
         }
 
         Ok(features)
@@ -192,18 +190,18 @@ impl SignalAdapter {
 
         // Calculate variance
         let mean = signal.iter().sum::<f64>() / signal.len() as f64;
-        let variance = signal.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / signal.len() as f64;
+        let variance = signal.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / signal.len() as f64;
 
         // Calculate max absolute change
-        let max_change = signal.windows(2)
+        let max_change = signal
+            .windows(2)
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0, f64::max);
 
         // Calculate zero crossing rate
         let centered: Vec<f64> = signal.iter().map(|x| x - mean).collect();
-        let zero_crossings: usize = centered.windows(2)
+        let zero_crossings: usize = centered
+            .windows(2)
             .filter(|w| (w[0] >= 0.0) != (w[1] >= 0.0))
             .count();
         let zcr = zero_crossings as f64 / signal.len() as f64;
@@ -219,9 +217,7 @@ impl SignalAdapter {
 
         // SNR estimate based on signal statistics
         let mean = signal.iter().sum::<f64>() / signal.len() as f64;
-        let variance = signal.iter()
-            .map(|x| (x - mean).powi(2))
-            .sum::<f64>() / signal.len() as f64;
+        let variance = signal.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / signal.len() as f64;
 
         // Higher variance relative to mean suggests better signal
         let snr_estimate = if mean.abs() > 1e-10 {
@@ -323,9 +319,7 @@ mod tests {
         let adapter = SignalAdapter::with_defaults();
 
         // Good signal
-        let good_signal: Vec<f64> = (0..100)
-            .map(|i| (i as f64 * 0.1).sin())
-            .collect();
+        let good_signal: Vec<f64> = (0..100).map(|i| (i as f64 * 0.1).sin()).collect();
         let good_quality = adapter.calculate_signal_quality(&good_signal);
 
         // Poor signal (constant)

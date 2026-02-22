@@ -24,7 +24,7 @@ impl Default for TriangulationConfig {
         Self {
             min_sensors: 3,
             max_uncertainty: 5.0,
-            path_loss_exponent: 3.0,  // Indoor with obstacles
+            path_loss_exponent: 3.0, // Indoor with obstacles
             reference_distance: 1.0,
             reference_rssi: -30.0,
             weighted: true,
@@ -63,7 +63,7 @@ impl Triangulator {
     pub fn estimate_position(
         &self,
         sensors: &[SensorPosition],
-        rssi_values: &[(String, f64)],  // (sensor_id, rssi)
+        rssi_values: &[(String, f64)], // (sensor_id, rssi)
     ) -> Option<Coordinates3D> {
         // Get distance estimates from RSSI
         let distances: Vec<(SensorPosition, f64)> = rssi_values
@@ -90,7 +90,7 @@ impl Triangulator {
     pub fn estimate_from_toa(
         &self,
         sensors: &[SensorPosition],
-        toa_values: &[(String, f64)],  // (sensor_id, time_of_arrival_ns)
+        toa_values: &[(String, f64)], // (sensor_id, time_of_arrival_ns)
     ) -> Option<Coordinates3D> {
         const SPEED_OF_LIGHT: f64 = 299_792_458.0; // m/s
 
@@ -121,8 +121,8 @@ impl Triangulator {
         // Solving for d:
         // d = d_0 * 10^((RSSI_0 - RSSI) / (10 * n))
 
-        let exponent = (self.config.reference_rssi - rssi)
-            / (10.0 * self.config.path_loss_exponent);
+        let exponent =
+            (self.config.reference_rssi - rssi) / (10.0 * self.config.path_loss_exponent);
 
         self.config.reference_distance * 10.0_f64.powf(exponent)
     }
@@ -339,9 +339,18 @@ mod tests {
         // Target at (5, 4) - calculate distances
         let target: (f64, f64) = (5.0, 4.0);
         let distances: Vec<(&str, f64)> = vec![
-            ("s1", ((target.0 - 0.0_f64).powi(2) + (target.1 - 0.0_f64).powi(2)).sqrt()),
-            ("s2", ((target.0 - 10.0_f64).powi(2) + (target.1 - 0.0_f64).powi(2)).sqrt()),
-            ("s3", ((target.0 - 5.0_f64).powi(2) + (target.1 - 10.0_f64).powi(2)).sqrt()),
+            (
+                "s1",
+                ((target.0 - 0.0_f64).powi(2) + (target.1 - 0.0_f64).powi(2)).sqrt(),
+            ),
+            (
+                "s2",
+                ((target.0 - 10.0_f64).powi(2) + (target.1 - 0.0_f64).powi(2)).sqrt(),
+            ),
+            (
+                "s3",
+                ((target.0 - 5.0_f64).powi(2) + (target.1 - 10.0_f64).powi(2)).sqrt(),
+            ),
         ];
 
         let dist_vec: Vec<(SensorPosition, f64)> = distances
@@ -366,10 +375,7 @@ mod tests {
         let sensors = create_test_sensors();
 
         // Only 2 distance measurements
-        let rssi_values = vec![
-            ("s1".to_string(), -40.0),
-            ("s2".to_string(), -45.0),
-        ];
+        let rssi_values = vec![("s1".to_string(), -40.0), ("s2".to_string(), -45.0)];
 
         let result = triangulator.estimate_position(&sensors, &rssi_values);
         assert!(result.is_none());

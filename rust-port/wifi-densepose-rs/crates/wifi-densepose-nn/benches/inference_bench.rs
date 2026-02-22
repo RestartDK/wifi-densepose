@@ -3,7 +3,7 @@
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use wifi_densepose_nn::{
     densepose::{DensePoseConfig, DensePoseHead},
-    inference::{EngineBuilder, InferenceOptions, MockBackend, Backend},
+    inference::{Backend, EngineBuilder, InferenceOptions, MockBackend},
     tensor::{Tensor, TensorShape},
     translator::{ModalityTranslator, TranslatorConfig},
 };
@@ -97,13 +97,9 @@ fn bench_batch_inference(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(*batch_size as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("batch", batch_size),
-            batch_size,
-            |b, _| {
-                b.iter(|| black_box(engine.infer_batch(&inputs).unwrap()))
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("batch", batch_size), batch_size, |b, _| {
+            b.iter(|| black_box(engine.infer_batch(&inputs).unwrap()))
+        });
     }
 
     group.finish();

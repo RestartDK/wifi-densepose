@@ -22,8 +22,8 @@ pub struct BreathingDetectorConfig {
 impl Default for BreathingDetectorConfig {
     fn default() -> Self {
         Self {
-            min_rate_bpm: 4.0,    // Very slow breathing
-            max_rate_bpm: 40.0,   // Fast breathing (distressed)
+            min_rate_bpm: 4.0,  // Very slow breathing
+            max_rate_bpm: 40.0, // Fast breathing (distressed)
             min_amplitude: 0.1,
             window_size: 512,
             window_overlap: 0.5,
@@ -65,12 +65,8 @@ impl BreathingDetector {
         let min_freq = self.config.min_rate_bpm as f64 / 60.0;
         let max_freq = self.config.max_rate_bpm as f64 / 60.0;
 
-        let (dominant_freq, amplitude) = self.find_dominant_frequency(
-            &spectrum,
-            sample_rate,
-            min_freq,
-            max_freq,
-        )?;
+        let (dominant_freq, amplitude) =
+            self.find_dominant_frequency(&spectrum, sample_rate, min_freq, max_freq)?;
 
         // Convert to BPM
         let rate_bpm = (dominant_freq * 60.0) as f32;
@@ -103,32 +99,27 @@ impl BreathingDetector {
 
     /// Compute frequency spectrum using FFT
     fn compute_spectrum(&self, signal: &[f64]) -> Vec<f64> {
-        use rustfft::{FftPlanner, num_complex::Complex};
+        use rustfft::{num_complex::Complex, FftPlanner};
 
         let n = signal.len().next_power_of_two();
         let mut planner = FftPlanner::new();
         let fft = planner.plan_fft_forward(n);
 
         // Prepare input with zero padding
-        let mut buffer: Vec<Complex<f64>> = signal
-            .iter()
-            .map(|&x| Complex::new(x, 0.0))
-            .collect();
+        let mut buffer: Vec<Complex<f64>> = signal.iter().map(|&x| Complex::new(x, 0.0)).collect();
         buffer.resize(n, Complex::new(0.0, 0.0));
 
         // Apply Hanning window
         for (i, sample) in buffer.iter_mut().enumerate().take(signal.len()) {
-            let window = 0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / signal.len() as f64).cos());
+            let window =
+                0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / signal.len() as f64).cos());
             *sample = Complex::new(sample.re * window, 0.0);
         }
 
         fft.process(&mut buffer);
 
         // Return magnitude spectrum (only positive frequencies)
-        buffer.iter()
-            .take(n / 2)
-            .map(|c| c.norm())
-            .collect()
+        buffer.iter().take(n / 2).map(|c| c.norm()).collect()
     }
 
     /// Find dominant frequency in a given range
@@ -189,7 +180,8 @@ impl BreathingDetector {
         }
 
         // Also check harmonics (2x, 3x frequency)
-        let harmonic_power: f64 = [2, 3].iter()
+        let harmonic_power: f64 = [2, 3]
+            .iter()
             .filter_map(|&mult| {
                 let harmonic_bin = peak_bin * mult;
                 if harmonic_bin < spectrum.len() {
@@ -280,9 +272,7 @@ mod tests {
         let detector = BreathingDetector::with_defaults();
 
         // Random noise with low amplitude
-        let signal: Vec<f64> = (0..1000)
-            .map(|i| (i as f64 * 0.1).sin() * 0.01)
-            .collect();
+        let signal: Vec<f64> = (0..1000).map(|i| (i as f64 * 0.1).sin() * 0.01).collect();
 
         let result = detector.detect(&signal, 100.0);
         // Should either be None or have very low confidence
